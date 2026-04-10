@@ -1,0 +1,104 @@
+name: Release Plugin
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Restore required Trino build metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p .mvn/modernizer
+          trino_version="$(grep -A 3 '<parent>' pom.xml | grep '<version>' | head -n 1 | sed -E 's/.*<version>([^<]+)<.*/\1/')"
+
+          for file in violations.xml violations-production-code-only.xml; do
+            if [[ ! -f ".mvn/modernizer/${file}" ]]; then
+              curl -fsSL "https://raw.githubusercontent.com/trinodb/trino/${trino_version}/.mvn/modernizer/${file}" \
+                -o ".mvn/modernizer/${file}"
+            fi
+          done
+
+      - name: Build and test
+        run: mvn -B clean verify
+
+      - name: Collect release assets
+        id: assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          plugin_zip="$(find target -maxdepth 1 -type f -name 'trino-trino-*.zip' | head -n 1)"
+          sha_file="target/SHA256SUMS.txt"
+
+          if [[ -z "${plugin_zip}" ]]; then
+            echo "Expected plugin artifacts were not created"
+            exit 1
+          fi
+
+          sha256sum "${plugin_zip}" > "${sha_file}"
+
+          {
+            echo "plugin_zip=${plugin_zip}"
+            echo "sha_file=${sha_file}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Publish GitHub release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+
+          cat > RELEASE_NOTES.md <<EOF
+          Automated release for ${tag}.
+
+          Assets:
+          - \`$(basename "${{ steps.assets.outputs.plugin_zip }}")\`: installable Trino plugin bundle
+          - \`$(basename "${{ steps.assets.outputs.sha_file }}")\`: SHA-256 checksums
+
+          Install:
+          1. Download the ZIP asset.
+          2. Extract it into your Trino \`plugin/trino/\` directory.
+          3. Add a catalog properties file and restart Trino.
+          EOF
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" \
+              "${{ steps.assets.outputs.plugin_zip }}" \
+              "${{ steps.assets.outputs.sha_file }}" \
+              --clobber
+          else
+            gh release create "${tag}" \
+              "${{ steps.assets.outputs.plugin_zip }}" \
+              "${{ steps.assets.outputs.sha_file }}" \
+              --title "${tag}" \
+              --notes-file RELEASE_NOTES.md
+          fi

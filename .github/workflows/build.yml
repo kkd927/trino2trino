@@ -1,0 +1,54 @@
+name: Build and Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Restore required Trino build metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p .mvn/modernizer
+          trino_version="$(grep -A 3 '<parent>' pom.xml | grep '<version>' | head -n 1 | sed -E 's/.*<version>([^<]+)<.*/\1/')"
+
+          for file in violations.xml violations-production-code-only.xml; do
+            if [[ ! -f ".mvn/modernizer/${file}" ]]; then
+              curl -fsSL "https://raw.githubusercontent.com/trinodb/trino/${trino_version}/.mvn/modernizer/${file}" \
+                -o ".mvn/modernizer/${file}"
+            fi
+          done
+
+      - name: Build and test
+        run: mvn -B clean verify
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trino-trino-build-artifacts
+          path: |
+            target/trino-trino-*.zip
+            target/trino-trino-*.jar
+            target/surefire-reports/**
+          if-no-files-found: warn
