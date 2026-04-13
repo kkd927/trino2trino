@@ -87,7 +87,7 @@ The connector uses five transport modes to maximize type coverage:
 | **NATIVE** | JDBC reads the type exactly | `boolean`, `bigint`, `varchar`, `date`, `uuid`, `array(varchar)`, `map(varchar, bigint)`, `row(id uuid, data json)` |
 | **VARCHAR transport** | `CAST(... AS VARCHAR)` → decode back | `time with time zone`, `interval year to month`, high-precision `timestamp(p>9)` |
 | **VARBINARY transport** | Project as `VARBINARY` → decode back | `HyperLogLog`, `P4HyperLogLog`, `qdigest(T)`, `setdigest`, `tdigest` |
-| **JSON transport** | Recursive JSON rewrite → decode back | `array(timestamp(12))`, `map(varchar, interval day to second)`, structural columns with unsupported descendants |
+| **JSON transport** | Recursive JSON rewrite → decode back | `array(timestamp(12))`, `map(varchar, interval day to second)`, structural columns whose non-native descendants can be represented safely through JSON transport |
 | **UNSUPPORTED** | Fallback (`IGNORE` or `CONVERT_TO_VARCHAR`) | Opaque or connector-specific types without a safe transport rule |
 
 See the [connector reference](docs/src/main/sphinx/connector/trino.md) for detailed type transport rules.
