@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - main
+      - "release/trino-*"
   pull_request:
     branches:
       - main
+      - "release/trino-*"
   workflow_dispatch:
 
 jobs:
@@ -38,6 +40,10 @@ jobs:
                 -o ".mvn/modernizer/${file}"
             fi
           done
+
+      - name: Bootstrap missing Trino JDBC dependencies
+        shell: bash
+        run: .github/scripts/bootstrap-trino-deps.sh
 
       - name: Build and test
         run: mvn -B clean verify
