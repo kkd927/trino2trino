@@ -595,7 +595,6 @@ class TestTrinoConnectorTest
     }
 
     @Test
-    @Override
     public void testLimitPushdownWithDistinctAndJoin()
     {
         MaterializedResult result = computeActual("""
