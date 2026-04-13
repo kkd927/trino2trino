@@ -6,7 +6,7 @@ as a local read-only catalog.
 ## Requirements
 
 - Remote Trino must be reachable through the Trino JDBC driver
-- This connector is currently tested against Trino 479 querying remote Trino 479
+- This connector is currently tested against Trino 477 querying remote Trino 477
 
 ## Configuration
 

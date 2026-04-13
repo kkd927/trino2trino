@@ -1,15 +1,15 @@
 services:
   trino-local:
-    image: trinodb/trino:479
+    image: trinodb/trino:477
     container_name: trino-local
     volumes:
-      - ./target/trino-trino-479:/usr/lib/trino/plugin/trino
+      - ./target/trino-trino-477:/usr/lib/trino/plugin/trino
       - ./conf/trino/catalog:/etc/trino/catalog
     ports:
       - "8080:8080"
 
   trino-remote:
-    image: trinodb/trino:479
+    image: trinodb/trino:477
     container_name: trino-remote
     volumes:
       - ./conf/remotetrino/catalog:/etc/trino/catalog

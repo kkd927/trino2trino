@@ -2,7 +2,7 @@
 
 [![Build and Test](https://github.com/kkd927/trino2trino/actions/workflows/build.yml/badge.svg)](https://github.com/kkd927/trino2trino/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Trino](https://img.shields.io/badge/Trino-479-blue)
+![Trino](https://img.shields.io/badge/Trino-477-blue)
 
 A read-only [Trino](https://trino.io/) connector that queries a remote Trino cluster via JDBC.
 
@@ -29,7 +29,7 @@ JOIN remote.schema.table r ON l.id = r.id;
 Download the plugin ZIP from [GitHub Releases](https://github.com/kkd927/trino2trino/releases) and extract it into the Trino plugin directory:
 
 ```bash
-unzip trino-trino-479.zip -d /usr/lib/trino/plugin/trino/
+unzip trino-trino-477.zip -d /usr/lib/trino/plugin/trino/
 ```
 
 ### 2. Configure
@@ -135,7 +135,7 @@ FROM TABLE(
 - Remote session properties and roles are not propagated
 - Negative dates (before year 0001) are not preserved correctly through JDBC
 - Cross-cluster joins can only be improved with pushdown and statistics; the connector cannot remove the structural cost of federating between clusters
-- Tested against Trino 479 querying remote Trino 479; cross-version compatibility is not claimed yet
+- Tested against Trino 477 querying remote Trino 477; cross-version compatibility is not claimed yet
 
 ## Contributing
 
