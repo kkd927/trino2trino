@@ -171,13 +171,24 @@ class TestTrinoConnectorTest
 
     private Session eagerJoinPushdownSession(boolean complexJoinPushdownEnabled)
     {
-        Session session = joinPushdownEnabled(getSession());
-        String catalog = session.getCatalog().orElseThrow();
-        return Session.builder(session)
+        return eagerJoinPushdownSession(getSession(), complexJoinPushdownEnabled);
+    }
+
+    private Session eagerJoinPushdownSession(Session session, boolean complexJoinPushdownEnabled)
+    {
+        Session joinPushdownSession = super.joinPushdownEnabled(session);
+        String catalog = joinPushdownSession.getCatalog().orElseThrow();
+        return Session.builder(joinPushdownSession)
                 .setCatalogSessionProperty(catalog, "join_pushdown_strategy", "EAGER")
                 .setCatalogSessionProperty(catalog, "complex_join_pushdown_enabled", Boolean.toString(complexJoinPushdownEnabled))
                 .setSystemProperty("enable_dynamic_filtering", "false")
                 .build();
+    }
+
+    @Override
+    protected Session joinPushdownEnabled(Session session)
+    {
+        return eagerJoinPushdownSession(session, false);
     }
 
     // =========================================================================
