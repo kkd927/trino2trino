@@ -168,8 +168,8 @@ FROM TABLE(
 ``system.query`` is an explicit bypass for the normal connector planning path:
 
 - the inner SQL string is sent to remote Trino as written
-- the connector still infers output columns and applies the same native /
-  varchar / json transport rules to the result
+- the connector still infers output columns and applies the normal type
+  mapping and transport rules to the result
 - explicit table references must stay within the configured remote catalog
 
 ## SQL support
