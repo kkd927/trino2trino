@@ -28,6 +28,7 @@ import io.trino.spi.expression.StandardFunctions;
 import io.trino.spi.expression.Variable;
 import io.trino.spi.type.ArrayType;
 import io.trino.spi.type.RowType;
+import io.trino.testing.TestingConnectorSession;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Types;
@@ -40,12 +41,11 @@ import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
 import static io.trino.spi.type.TimestampType.TIMESTAMP_MILLIS;
 import static io.trino.spi.type.VarcharType.VARCHAR;
-import static io.trino.testing.TestingConnectorSession.builder;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TestTrinoRemoteSqlRenderer
 {
-    private static final ConnectorSession SESSION = builder()
+    private static final ConnectorSession SESSION = TestingConnectorSession.builder()
             .setPropertyMetadata(new TrinoRemoteDelegationSessionProperties(new TrinoRemoteDelegationConfig()).getSessionProperties())
             .setPropertyValues(Map.of(
                     TrinoRemoteDelegationSessionProperties.REMOTE_DELEGATION_ENABLED, true,
