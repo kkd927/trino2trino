@@ -59,6 +59,8 @@ SELECT * FROM remote.schema.table LIMIT 10;
 | `connection-user` | Username for remote Trino | OS user |
 | `connection-password` | Password for remote Trino | - |
 | `unsupported-type-handling` | Final fallback for truly unsupported types: `IGNORE` or `CONVERT_TO_VARCHAR` | `CONVERT_TO_VARCHAR` |
+| `trino.remote-delegation.enabled` | Enable Trino-native SQL rendering for remote fragments | `true` |
+| `trino.remote-delegation.mode` | Delegation policy: `AUTO`, `OFF`, or `STRICT` | `AUTO` |
 
 ## Supported / Not Supported
 
@@ -67,7 +69,7 @@ SELECT * FROM remote.schema.table LIMIT 10;
 | `SELECT` | Yes | |
 | `JOIN` (cross-cluster) | Yes | |
 | Predicate pushdown | Partial | Native columns and typed VARCHAR-transport temporal/interval columns only; JSON/VARBINARY transport columns are excluded |
-| Projection pushdown | Yes | |
+| Projection pushdown | Yes | Trino-native expressions are delegated when the compatibility registry allows them |
 | Aggregation pushdown | Partial | `count`, `count distinct`, `min/max`, `sum`, `avg` are pushed down; `stddev`, `variance`, `covariance`, `correlation`, `regression` are not |
 | `LIMIT` / `ORDER BY ... LIMIT` | Yes | |
 | Same-remote join pushdown | Partial | Supported join shapes only; `IS NOT DISTINCT FROM`, some inequality joins, and some complex joins are not pushed down |
@@ -95,11 +97,17 @@ See the [connector reference](docs/src/main/sphinx/connector/trino.md) for detai
 ## Pushdown & Statistics
 
 - Predicate pushdown for native columns and typed VARCHAR-transport temporal/interval columns
-- Projection pushdown
+- Trino-native expression and projection delegation for compatible casts, arithmetic, comparisons, `LIKE`, `IN`, regexp, JSON, date/time, dereference, and subscript expressions
 - `LIMIT` and `ORDER BY ... LIMIT`
 - Aggregation pushdown for `count`, `count distinct`, `min/max`, `sum`, `avg`
 - Same-remote join pushdown for supported join shapes
 - Table statistics via `SHOW STATS FOR <table>` on the remote side
+
+`AUTO` mode delegates compatible remote subtrees and safely falls back to local
+evaluation for unsupported expressions. `STRICT` mode fails a remote subtree when
+it cannot be rendered for remote Trino. `OFF` leaves only the baseline JDBC
+pushdown path enabled. Catalog session properties are
+`remote_delegation_enabled` and `remote_delegation_mode`.
 
 See the [connector reference](docs/src/main/sphinx/connector/trino.md) for pushdown behavior on transport-backed columns.
 
@@ -119,6 +127,8 @@ FROM TABLE(
 - The inner SQL string is sent to remote Trino as written
 - Output columns still go through normal transport rules
 - Table references must stay within the configured remote catalog
+- Unlike normal table access, `system.query` is explicit user SQL; remote
+  failures are returned directly and are not treated as fallback candidates.
 
 ## Scope Model
 
@@ -133,6 +143,9 @@ FROM TABLE(
 - `system.query` is documented only for row-returning read queries
 - All remote SQL executes as the configured `connection-user`; end-user identity is not propagated
 - Remote session properties and roles are not propagated
+- Session-sensitive functions such as `current_timestamp`, `current_date`, and
+  current time zone functions are not delegated unless their semantics are
+  represented by explicit, compatible SQL expressions.
 - Negative dates (before year 0001) are not preserved correctly through JDBC
 - Cross-cluster joins can only be improved with pushdown and statistics; the connector cannot remove the structural cost of federating between clusters
 - Tested against Trino 477 querying remote Trino 477; cross-version compatibility is not claimed yet
