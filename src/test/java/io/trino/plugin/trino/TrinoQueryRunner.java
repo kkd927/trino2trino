@@ -273,6 +273,16 @@ public final class TrinoQueryRunner
         remoteRunner.execute(memorySession,
                 "CREATE TABLE test_null_varchar AS SELECT x FROM (VALUES 'hello', CAST(NULL AS VARCHAR)) AS t(x)");
 
+        remoteRunner.execute(memorySession, """
+                CREATE TABLE test_delegation_log AS
+                SELECT * FROM (
+                    VALUES
+                        ('2024-01-15 10:30:45.123', '2024-01-15T01:30:45Z', '/post/100', BIGINT '1'),
+                        ('2024-01-15 12:00:00.000', '2024-01-15T03:00:00Z', '/post/200', BIGINT '1'),
+                        ('2024-01-16 11:00:00.000', '2024-01-16T02:00:00Z', '/search', BIGINT '2')
+                ) AS t(log_timestamp, iso_timestamp, path, regionkey)
+                """);
+
         // --- Date ---
         remoteRunner.execute(memorySession,
                 "CREATE TABLE test_date AS SELECT x FROM (VALUES DATE '2024-01-15', DATE '1999-12-31') AS t(x)");

@@ -301,6 +301,13 @@ class TestTrinoConnectorTest
     }
 
     @Test
+    void testNativeQueryAnonymousOutputColumn()
+    {
+        assertThat(query("SELECT * FROM TABLE(system.query(query => 'SELECT count(*) FROM memory.default.nation'))"))
+                .matches("VALUES BIGINT '25'");
+    }
+
+    @Test
     @Override
     public void testNativeQuerySelectFromTestTable()
     {
