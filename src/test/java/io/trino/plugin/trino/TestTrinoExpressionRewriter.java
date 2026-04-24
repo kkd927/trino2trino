@@ -43,7 +43,6 @@ class TestTrinoExpressionRewriter
             Optional.empty(),
             Optional.empty(),
             Optional.empty());
-
     private final ConnectorExpressionRewriter<ParameterizedExpression> rewriter =
             TrinoClient.createConnectorExpressionRewriter(name -> "\"" + name + "\"");
 

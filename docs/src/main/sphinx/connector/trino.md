@@ -49,6 +49,12 @@ connection-url=jdbc:trino://remote-host:443/catalog_name?SSL=true
    * - ``unsupported-type-handling``
      - Final fallback for truly unsupported types: ``IGNORE`` or ``CONVERT_TO_VARCHAR``
      - ``CONVERT_TO_VARCHAR``
+   * - ``trino.remote-delegation.enabled``
+     - Enable Trino-native SQL rendering for compatible remote fragments
+     - ``true``
+   * - ``trino.remote-delegation.mode``
+     - Delegation policy: ``AUTO``, ``OFF``, or ``STRICT``
+     - ``AUTO``
 ```
 
 ## Querying
@@ -171,6 +177,8 @@ FROM TABLE(
 - the connector still infers output columns and applies the same native /
   varchar / json transport rules to the result
 - explicit table references must stay within the configured remote catalog
+- remote failures are returned directly; explicit passthrough SQL is not a
+  fallback candidate
 
 ## SQL support
 
@@ -213,10 +221,27 @@ The connector supports:
 
 - predicate pushdown
 - projection pushdown
+- Trino-native remote SQL delegation for compatible casts, comparisons, boolean
+  logic, arithmetic, ``LIKE``, ``IN``, regexp, JSON, date/time functions,
+  dereference, subscript, and aggregation expressions
 - ``LIMIT`` pushdown
 - ``ORDER BY ... LIMIT`` pushdown
 - aggregation pushdown
 - same-remote join pushdown for supported join shapes
+
+Remote delegation modes:
+
+- ``AUTO`` delegates compatible remote subtrees and leaves unsupported
+  expressions as local fallback when that preserves semantics
+- ``STRICT`` fails a remote subtree when it cannot be rendered for remote Trino
+- ``OFF`` disables the Trino-native renderer and leaves only the baseline JDBC
+  pushdown path enabled
+
+The equivalent catalog session properties are
+``remote_delegation_enabled`` and ``remote_delegation_mode``. ``EXPLAIN`` shows
+delegated query relations with a marker such as
+``RemoteTrinoQuery[catalog=memory, delegated=true]`` without inlining bind
+values.
 
 Pushdown behavior for transport-backed columns is split:
 
@@ -249,6 +274,11 @@ Not supported:
 - remote session property forwarding
 - role delegation
 - extra credential passthrough
+
+Session-sensitive functions such as ``current_timestamp``, ``current_date``,
+``current_time``, and current time zone functions are not delegated. Expressions
+with explicit time zone operands, such as ``AT TIME ZONE 'Asia/Seoul'``, can be
+delegated when the rendered SQL is otherwise compatible.
 
 ## Limitations
 

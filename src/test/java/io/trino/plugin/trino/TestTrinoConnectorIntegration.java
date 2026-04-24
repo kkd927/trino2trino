@@ -384,6 +384,18 @@ public class TestTrinoConnectorIntegration
     }
 
     @Test
+    void testQueryPassthroughWithAnonymousOutput()
+    {
+        MaterializedResult result = computeActual("""
+                SELECT *
+                FROM TABLE(remote.system.query(
+                    query => 'SELECT count(*) FROM memory.default.nation'
+                ))
+                """);
+        assertThat(result.getOnlyValue()).isEqualTo(25L);
+    }
+
+    @Test
     void testQueryPassthroughCanUseFullyQualifiedRemoteSql()
     {
         MaterializedResult result = computeActual("""
@@ -587,6 +599,50 @@ public class TestTrinoConnectorIntegration
                 ORDER BY n.name
                 """);
         assertThat(remote.getMaterializedRows()).isEqualTo(local.getMaterializedRows());
+    }
+
+    @Test
+    void testComplexFunctionRemoteDelegation()
+    {
+        String sql = """
+                SELECT regexp_extract(path, '/post/([0-9]+)', 1)
+                FROM remote.default.test_delegation_log
+                WHERE date_trunc('day', CAST(log_timestamp AS timestamp)) = TIMESTAMP '2024-01-15 00:00:00'
+                    AND regexp_like(path, '^/post/')
+                    AND CAST(from_iso8601_timestamp(iso_timestamp) AT TIME ZONE 'Asia/Seoul' AS DATE) = DATE '2024-01-15'
+                ORDER BY 1
+                """;
+
+        MaterializedResult result = computeActual(sql);
+        assertThat(result.getOnlyColumnAsSet()).containsExactly("100", "200");
+
+        String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
+        assertThat(explain).contains("RemoteTrinoQuery[catalog=memory, delegated=true]");
+        assertThat(explain).doesNotContain("ScanFilterProject");
+    }
+
+    @Test
+    void testRemoteSubtreeDelegatedForLocalJoin()
+    {
+        String sql = """
+                SELECT r.name, pageviews.views
+                FROM tpch.tiny.region r
+                JOIN (
+                    SELECT regionkey, count(*) AS views
+                    FROM remote.default.test_delegation_log
+                    WHERE regexp_like(path, '^/post/')
+                    GROUP BY regionkey
+                ) pageviews
+                    ON pageviews.regionkey = r.regionkey
+                """;
+
+        MaterializedResult result = computeActual(sql);
+        assertThat(result.getMaterializedRows()).hasSize(1);
+        assertThat(result.getMaterializedRows().getFirst().getField(0)).isEqualTo("AMERICA");
+        assertThat(result.getMaterializedRows().getFirst().getField(1)).isEqualTo(2L);
+
+        String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
+        assertThat(explain).contains("RemoteTrinoQuery[catalog=memory, delegated=true]");
     }
 
     // =========================================================================
