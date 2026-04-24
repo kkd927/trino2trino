@@ -36,6 +36,8 @@ import java.util.OptionalLong;
 import java.util.UUID;
 
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
+import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.joining;
 
 final class PassthroughQueryMetadataHelper
 {
@@ -74,6 +76,22 @@ final class PassthroughQueryMetadataHelper
                 statement.execute("DEALLOCATE PREPARE " + statementName);
             }
         }
+    }
+
+    PreparedQuery withOutputAliases(PreparedQuery preparedQuery, List<DescribedOutputColumn> outputColumns)
+    {
+        requireNonNull(preparedQuery, "preparedQuery is null");
+        requireNonNull(outputColumns, "outputColumns is null");
+        if (outputColumns.isEmpty()) {
+            return preparedQuery;
+        }
+
+        String aliases = outputColumns.stream()
+                .map(DescribedOutputColumn::name)
+                .map(PassthroughQueryMetadataHelper::quoteIdentifier)
+                .collect(joining(", "));
+        return preparedQuery.transformQuery(query ->
+                "SELECT * FROM (" + TrinoClient.stripTrailingSemicolon(query) + ") " + quoteIdentifier("_trino_passthrough") + "(" + aliases + ")");
     }
 
     JdbcTableHandle buildPassthroughTableHandle(ConnectorSession session, Connection connection, PreparedQuery preparedQuery, List<DescribedOutputColumn> outputColumns)
@@ -143,5 +161,10 @@ final class PassthroughQueryMetadataHelper
     private JdbcTypeHandle jdbcTypeHandleForTypeName(String typeName)
     {
         return TrinoJdbcTypeHandleResolver.resolve(typeManager, typeName);
+    }
+
+    private static String quoteIdentifier(String identifier)
+    {
+        return "\"" + identifier.replace("\"", "\"\"") + "\"";
     }
 }

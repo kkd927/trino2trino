@@ -47,3 +47,6 @@ target/
 # Gradle
 .gradle/
 build/
+
+# Local catalog credentials
+conf/trino/catalog/cquery.properties
