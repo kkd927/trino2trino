@@ -18,10 +18,10 @@ import io.trino.plugin.jdbc.JdbcTypeHandle;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.expression.Call;
-import io.trino.spi.expression.ConnectorExpression;
 import io.trino.spi.expression.FunctionName;
 import io.trino.spi.expression.StandardFunctions;
 import io.trino.spi.expression.Variable;
+import io.trino.testing.TestingConnectorSession;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Types;
@@ -35,7 +35,6 @@ import static io.trino.plugin.trino.TrinoDelegationAnalyzer.Decision.REMOTE_DELE
 import static io.trino.plugin.trino.TrinoDelegationAnalyzer.Decision.UNSUPPORTED;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
-import static io.trino.testing.TestingConnectorSession.builder;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TestTrinoDelegationAnalyzer
@@ -96,7 +95,7 @@ class TestTrinoDelegationAnalyzer
 
     private static ConnectorSession session(TrinoRemoteDelegationMode mode)
     {
-        return builder()
+        return TestingConnectorSession.builder()
                 .setPropertyMetadata(new TrinoRemoteDelegationSessionProperties(new TrinoRemoteDelegationConfig()).getSessionProperties())
                 .setPropertyValues(Map.of(
                         TrinoRemoteDelegationSessionProperties.REMOTE_DELEGATION_ENABLED, true,
