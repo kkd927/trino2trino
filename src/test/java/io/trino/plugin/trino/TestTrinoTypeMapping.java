@@ -324,6 +324,17 @@ class TestTrinoTypeMapping
     }
 
     @Test
+    void testNumberDelegatedExpressionWithConstant()
+    {
+        String sql = "SELECT CAST(x + NUMBER '1' AS VARCHAR) FROM remote.default.test_number WHERE x = NUMBER '0.1'";
+        MaterializedResult result = computeActual(sql);
+        assertThat(result.getOnlyValue()).isEqualTo("1.1");
+
+        String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
+        assertThat(explain).contains("RemoteTrinoQuery[catalog=memory, delegated=true]");
+    }
+
+    @Test
     void testNumberSpecialValues()
     {
         MaterializedResult result = computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_number_special");
