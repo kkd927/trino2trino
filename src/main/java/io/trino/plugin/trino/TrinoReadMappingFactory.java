@@ -95,6 +95,10 @@ final class TrinoReadMappingFactory
         Type logicalType = typeName.isEmpty() ? null : TrinoTypeNameParser.parseTypeName(typeName, typeManager);
         Optional<ColumnMapping> transportMapping = transportFallbackColumnMapping(logicalType);
 
+        if ((logicalType != null && TrinoTypeClassifier.isNumberType(logicalType)) || normalizedTypeName.equals("number")) {
+            return Optional.of(TrinoNumberCodec.numberColumnMapping());
+        }
+
         switch (typeHandle.jdbcType()) {
             case Types.BIT, Types.BOOLEAN:
                 return Optional.of(booleanColumnMapping());
@@ -132,6 +136,8 @@ final class TrinoReadMappingFactory
                 return transportMapping.isPresent() ? transportMapping : toComplexTypeMapping(session, typeHandle, typeName, normalizedTypeName);
             case Types.TIME_WITH_TIMEZONE:
                 return timeWithTimeZoneColumnMapping(typeHandle, typeName, logicalType);
+            case Types.OTHER:
+                break;
             default:
                 break;
         }

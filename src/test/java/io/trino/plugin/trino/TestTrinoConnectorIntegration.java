@@ -454,6 +454,18 @@ public class TestTrinoConnectorIntegration
     }
 
     @Test
+    void testQueryPassthroughNumberResult()
+    {
+        MaterializedResult result = computeActual("""
+                SELECT CAST(x AS VARCHAR)
+                FROM TABLE(remote.system.query(
+                    query => 'SELECT NUMBER ''0.1'' AS x'
+                ))
+                """);
+        assertThat(result.getOnlyValue()).isEqualTo("0.1");
+    }
+
+    @Test
     void testQueryPassthroughUnsupportedStructuralResult()
     {
         MaterializedResult result = computeActual("""

@@ -69,6 +69,7 @@ import io.trino.spi.statistics.TableStatistics;
 import io.trino.spi.type.CharType;
 import io.trino.spi.type.DateType;
 import io.trino.spi.type.DecimalType;
+import io.trino.spi.type.NumberType;
 import io.trino.spi.type.TimeType;
 import io.trino.spi.type.TimeWithTimeZoneType;
 import io.trino.spi.type.TimestampType;
@@ -93,6 +94,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static io.trino.matching.Pattern.typeOf;
@@ -543,6 +545,9 @@ public class TrinoClient
             }
             return WriteMapping.objectMapping(dataType, longDecimalWriteFunction(decimalType));
         }
+        if (type instanceof NumberType) {
+            return TrinoNumberCodec.numberWriteMapping();
+        }
         if (type instanceof CharType || type instanceof VarcharType) {
             return WriteMapping.sliceMapping("varchar", (statement, index, value) -> statement.setString(index, value.toStringUtf8()));
         }
@@ -585,7 +590,7 @@ public class TrinoClient
     }
 
     @Override
-    public JdbcOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata)
+    public JdbcOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, Consumer<Runnable> rollbackActionCollector)
     {
         throw new TrinoException(NOT_SUPPORTED, "This connector does not support creating tables with data");
     }

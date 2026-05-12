@@ -269,6 +269,12 @@ public final class TrinoQueryRunner
         remoteRunner.execute(memorySession,
                 "CREATE TABLE test_decimal AS SELECT x FROM (VALUES DECIMAL '123.45', DECIMAL '999.99') AS t(x)");
 
+        // --- NUMBER ---
+        remoteRunner.execute(memorySession,
+                "CREATE TABLE test_number AS SELECT x FROM (VALUES NUMBER '0.1', NUMBER '3.1415', NUMBER '20050910133100123') AS t(x)");
+        remoteRunner.execute(memorySession,
+                "CREATE TABLE test_number_special AS SELECT x FROM (VALUES NUMBER 'NaN', NUMBER '+Infinity', NUMBER '-Infinity') AS t(x)");
+
         // --- NULL varchar ---
         remoteRunner.execute(memorySession,
                 "CREATE TABLE test_null_varchar AS SELECT x FROM (VALUES 'hello', CAST(NULL AS VARCHAR)) AS t(x)");

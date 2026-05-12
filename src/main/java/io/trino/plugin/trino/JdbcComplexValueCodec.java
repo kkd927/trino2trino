@@ -166,6 +166,9 @@ final class JdbcComplexValueCodec
             }
             return values;
         }
+        if (TrinoTypeClassifier.isNumberType(type)) {
+            return TrinoNumberCodec.formatObject(trinoValue);
+        }
         return trinoValue;
     }
 
@@ -351,6 +354,10 @@ final class JdbcComplexValueCodec
         }
         if (TrinoTypeClassifier.isIpAddressType(type)) {
             type.writeSlice(builder, TrinoSpecialTypeCodec.ipAddressSlice(value.toString()));
+            return;
+        }
+        if (TrinoTypeClassifier.isNumberType(type)) {
+            type.writeObject(builder, TrinoNumberCodec.toTrinoNumber(value));
             return;
         }
         throw new TrinoException(JDBC_ERROR, format(

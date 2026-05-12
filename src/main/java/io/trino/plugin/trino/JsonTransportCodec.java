@@ -302,6 +302,10 @@ final class JsonTransportCodec
             type.writeSlice(builder, TrinoSpecialTypeCodec.ipAddressSlice(value));
             return;
         }
+        if (TrinoTypeClassifier.isNumberType(type)) {
+            type.writeObject(builder, TrinoNumberCodec.parse(value));
+            return;
+        }
         if (TrinoTypeClassifier.isIntervalYearToMonthType(type) || TrinoTypeClassifier.isIntervalDayToSecondType(type)) {
             type.writeLong(builder, TemporalTransportCodec.parseIntervalValue(value, type));
             return;
