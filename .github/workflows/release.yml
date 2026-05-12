@@ -22,12 +22,12 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up JDK 25
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "25"
@@ -52,7 +52,7 @@ jobs:
         shell: bash
         run: .github/scripts/bootstrap-trino-deps.sh
 
-      - name: Build and test
+      - name: Build, test, and package plugin
         run: mvn -B clean verify
 
       - name: Collect release assets
@@ -61,14 +61,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          plugin_zip="$(find target -maxdepth 1 -type f -name 'trino-trino-*.zip' | head -n 1)"
+          mapfile -t plugin_zips < <(find target -maxdepth 1 -type f -name 'trino-trino-*.zip' | sort)
           sha_file="target/SHA256SUMS.txt"
 
-          if [[ -z "${plugin_zip}" ]]; then
-            echo "Expected plugin artifacts were not created"
+          if [[ "${#plugin_zips[@]}" -ne 1 ]]; then
+            echo "Expected exactly one plugin ZIP, found ${#plugin_zips[@]}"
+            printf '%s\n' "${plugin_zips[@]}"
             exit 1
           fi
 
+          plugin_zip="${plugin_zips[0]}"
           sha256sum "${plugin_zip}" > "${sha_file}"
 
           {

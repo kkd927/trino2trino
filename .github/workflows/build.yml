@@ -11,16 +11,19 @@ on:
       - "release/trino-*"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 25
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "25"
@@ -48,13 +51,12 @@ jobs:
       - name: Build and test
         run: mvn -B clean verify
 
-      - name: Upload build artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v6
         with:
-          name: trino-trino-build-artifacts
+          name: test-reports
           path: |
-            target/trino-trino-*.zip
-            target/trino-trino-*.jar
             target/surefire-reports/**
-          if-no-files-found: warn
+            target/failsafe-reports/**
+          if-no-files-found: ignore
