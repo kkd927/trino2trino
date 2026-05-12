@@ -21,12 +21,14 @@ import io.trino.spi.type.Type;
 import io.trino.spi.type.TypeManager;
 import org.junit.jupiter.api.Test;
 
+import java.sql.Types;
 import java.util.List;
 
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
 import static io.trino.spi.type.DoubleType.DOUBLE;
 import static io.trino.spi.type.IntegerType.INTEGER;
+import static io.trino.spi.type.NumberType.NUMBER;
 import static io.trino.spi.type.SmallintType.SMALLINT;
 import static io.trino.spi.type.TinyintType.TINYINT;
 import static io.trino.spi.type.VarbinaryType.VARBINARY;
@@ -58,6 +60,7 @@ class TestTrinoTypeParser
         assertThat(parse("bigint")).isEqualTo(BIGINT);
         assertThat(parse("real")).isInstanceOf(Type.class);
         assertThat(parse("double")).isEqualTo(DOUBLE);
+        assertThat(parse("number")).isEqualTo(NUMBER);
     }
 
     @Test
@@ -254,6 +257,8 @@ class TestTrinoTypeParser
     {
         assertThat(TrinoTypeClassifier.supportsComplexReadType(parse("array(json)"))).isTrue();
         assertThat(TrinoTypeClassifier.supportsComplexReadType(parse("map(varchar, ipaddress)"))).isTrue();
+        assertThat(TrinoTypeClassifier.supportsComplexReadType(parse("array(number)"))).isTrue();
+        assertThat(TrinoTypeClassifier.supportsComplexReadType(parse("row(x number)"))).isTrue();
     }
 
     @Test
@@ -265,5 +270,12 @@ class TestTrinoTypeParser
         assertThat(TrinoTypeClassifier.supportsComplexReadType(parse("array(timestamp(6))"))).isFalse();
         assertThat(TrinoTypeClassifier.supportsComplexReadType(parse("array(timestamp(12))"))).isFalse();
         assertThat(TrinoTypeClassifier.supportsComplexReadType(parse("row(id uuid, ts timestamp(6) with time zone)"))).isFalse();
+    }
+
+    @Test
+    void testNumberJdbcTypeHandle()
+    {
+        assertThat(TrinoJdbcTypeHandleResolver.resolve(TYPE_MANAGER, "number").jdbcType()).isEqualTo(Types.OTHER);
+        assertThat(TrinoRemoteSqlRenderer.jdbcTypeHandleFor(NUMBER).jdbcType()).isEqualTo(Types.OTHER);
     }
 }

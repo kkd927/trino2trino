@@ -2,7 +2,7 @@
 
 [![Build and Test](https://github.com/kkd927/trino2trino/actions/workflows/build.yml/badge.svg)](https://github.com/kkd927/trino2trino/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Trino](https://img.shields.io/badge/Trino-479-blue)
+![Trino](https://img.shields.io/badge/Trino-480-blue)
 
 A read-only [Trino](https://trino.io/) connector that queries a remote Trino cluster via JDBC.
 
@@ -29,7 +29,7 @@ JOIN remote.schema.table r ON l.id = r.id;
 Download the plugin ZIP from [GitHub Releases](https://github.com/kkd927/trino2trino/releases) and extract it into the Trino plugin directory:
 
 ```bash
-unzip trino-trino-479.zip -d /usr/lib/trino/plugin/trino/
+unzip trino-trino-480.zip -d /usr/lib/trino/plugin/trino/
 ```
 
 ### 2. Configure
@@ -86,7 +86,7 @@ The connector uses five transport modes to maximize type coverage:
 
 | Transport Mode | Strategy | Examples |
 |---------------|----------|----------|
-| **NATIVE** | JDBC reads the type exactly | `boolean`, `bigint`, `varchar`, `date`, `uuid`, `array(varchar)`, `map(varchar, bigint)`, `row(id uuid, data json)` |
+| **NATIVE** | JDBC reads the type exactly | `boolean`, `bigint`, `number`, `varchar`, `date`, `uuid`, `array(varchar)`, `map(varchar, bigint)`, `row(id uuid, data json)` |
 | **VARCHAR transport** | `CAST(... AS VARCHAR)` → decode back | `time with time zone`, `interval year to month`, high-precision `timestamp(p>9)` |
 | **VARBINARY transport** | Project as `VARBINARY` → decode back | `HyperLogLog`, `P4HyperLogLog`, `qdigest(T)`, `setdigest`, `tdigest` |
 | **JSON transport** | Recursive JSON rewrite → decode back | `array(timestamp(12))`, `map(varchar, interval day to second)`, structural columns whose non-native descendants can be represented safely through JSON transport |
@@ -148,11 +148,25 @@ FROM TABLE(
   represented by explicit, compatible SQL expressions.
 - Negative dates (before year 0001) are not preserved correctly through JDBC
 - Cross-cluster joins can only be improved with pushdown and statistics; the connector cannot remove the structural cost of federating between clusters
-- Tested against Trino 479 querying remote Trino 479; cross-version compatibility is not claimed yet
+- Tested against Trino 480 querying remote Trino 480; cross-version compatibility is not claimed yet
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for build, test, and development instructions.
+
+### Optional Delta Lake smoke test
+
+The default test suite uses in-process Trino 480 instances with `memory` and
+`tpch` catalogs. For the common deployment pattern where a smaller federated
+Trino cluster queries a separate Delta Lake-focused Trino cluster, run the
+optional Docker smoke test:
+
+```bash
+mvn -B -Dair.check.skip-all=true -DskipTests package
+testing/delta-smoke/run.sh
+```
+
+See [docs/delta-smoke.md](docs/delta-smoke.md) for the topology and assertions.
 
 ## License
 
