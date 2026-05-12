@@ -244,7 +244,7 @@ final class TrinoRemoteSqlRenderer
             if (constant.getValue() == null) {
                 return Optional.of(new ParameterizedExpression("CAST(NULL AS " + typeName(constant.getType()) + ")", List.of()));
             }
-            return Optional.of(new ParameterizedExpression("?", List.of(new QueryParameter(constant.getType(), Optional.of(constant.getValue())))));
+            return Optional.of(new ParameterizedExpression(bindExpression(constant.getType()), List.of(new QueryParameter(constant.getType(), Optional.of(constant.getValue())))));
         }
         if (expression instanceof FieldDereference fieldDereference) {
             return renderFieldDereference(session, fieldDereference, assignments, capabilities);
@@ -253,6 +253,14 @@ final class TrinoRemoteSqlRenderer
             return renderCall(session, call, assignments, capabilities);
         }
         return Optional.empty();
+    }
+
+    private static String bindExpression(Type type)
+    {
+        if (type instanceof NumberType) {
+            return "CAST(? AS " + NumberType.NAME + ")";
+        }
+        return "?";
     }
 
     private Optional<ParameterizedExpression> renderFieldDereference(

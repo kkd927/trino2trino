@@ -28,9 +28,11 @@ import io.trino.spi.expression.StandardFunctions;
 import io.trino.spi.expression.Variable;
 import io.trino.spi.type.ArrayType;
 import io.trino.spi.type.RowType;
+import io.trino.spi.type.TrinoNumber;
 import io.trino.testing.TestingConnectorSession;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.sql.Types;
 import java.util.List;
 import java.util.Map;
@@ -39,6 +41,7 @@ import java.util.Set;
 
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
+import static io.trino.spi.type.NumberType.NUMBER;
 import static io.trino.spi.type.TimestampType.TIMESTAMP_MILLIS;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -153,6 +156,24 @@ class TestTrinoRemoteSqlRenderer
                 .isEqualTo("(\"name\" LIKE ?)");
         assertThat(render(subscript, Map.of("tags", column("tags", VARCHAR_TYPE_HANDLE, new ArrayType(VARCHAR)))).expression())
                 .isEqualTo("\"tags\"[?]");
+    }
+
+    @Test
+    void testNumberConstantUsesTypedBindExpression()
+    {
+        ConnectorExpression expression = new Call(
+                NUMBER,
+                StandardFunctions.ADD_FUNCTION_NAME,
+                List.of(new Variable("x", NUMBER), new Constant(TrinoNumber.from(new BigDecimal("1")), NUMBER)));
+
+        ParameterizedExpression rewritten = render(expression, Map.of("x", column(
+                "x",
+                new JdbcTypeHandle(Types.OTHER, Optional.of("number"), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty()),
+                NUMBER)));
+
+        assertThat(rewritten.expression()).isEqualTo("(\"x\" + CAST(? AS number))");
+        assertThat(rewritten.parameters()).hasSize(1);
+        assertThat(rewritten.parameters().getFirst().getType()).isEqualTo(NUMBER);
     }
 
     @Test
