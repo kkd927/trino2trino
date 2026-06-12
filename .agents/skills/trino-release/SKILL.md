@@ -89,10 +89,25 @@ commands.
    ```
 
    Use release notes and compiler/test failures to make the smallest compatible
-   code changes needed.
-8. If Docker is available and `trinodb/trino:N` exists, run the relevant Docker
-   smoke test. If the image is missing or Docker is unavailable, report that it
-   was skipped.
+   code changes needed. If the full verify fails only because `airstyle:check`
+   reports formatting drift, run `mvn airstyle:format`, review the resulting
+   diff, then rerun `mvn clean verify`. If Checkstyle reports a mechanical
+   source-modernization rule from the new Trino/Airlift parent, make the
+   smallest syntax-only change and rerun the failing Maven stage.
+8. If Docker is available, check whether the upstream image exists:
+
+   ```bash
+   docker manifest inspect "trinodb/trino:${requested_version}" >/dev/null
+   ```
+
+   When the image exists and `testing/delta-smoke/run.sh` is present, run:
+
+   ```bash
+   testing/delta-smoke/run.sh
+   ```
+
+   If Docker, the image, or the smoke script is unavailable, report that it was
+   skipped with the exact reason.
 9. Commit on `main`:
 
    ```bash
@@ -138,7 +153,12 @@ commands.
 6. If compilation fails because current `main` code uses APIs missing from Trino
    N, inspect only the necessary release notes in `(N, M]` in reverse,
    error-driven order. For large gaps, do not fetch every release note up front.
-   Make the minimal compatibility changes required.
+   Make the minimal compatibility changes required. If the full verify fails
+   only because `airstyle:check` reports formatting drift, run
+   `mvn airstyle:format`, review the resulting diff, then rerun
+   `mvn clean verify`. If Checkstyle reports a mechanical
+   source-modernization rule from the selected Trino/Airlift parent, make the
+   smallest syntax-only change and rerun the failing Maven stage.
 7. Commit on the backport branch:
 
    ```bash
