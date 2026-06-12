@@ -6,7 +6,7 @@ as a local read-only catalog.
 ## Requirements
 
 - Remote Trino must be reachable through the Trino JDBC driver
-- This connector is currently tested against Trino 481 querying remote Trino 481
+- This connector is currently tested against Trino 448 querying remote Trino 448
 
 ## Configuration
 
@@ -93,7 +93,6 @@ Native scalar reads include:
 - ``boolean``
 - ``tinyint``, ``smallint``, ``integer``, ``bigint``
 - ``real``, ``double``, ``decimal(p,s)``
-- ``number``
 - ``char``, ``varchar``, ``varbinary``
 - ``date``
 - exact ``time(p)``, ``timestamp(p)``, ``timestamp(p) with time zone``
@@ -302,6 +301,6 @@ The test suite is centered on the generic contract exposed by remote Trino:
 - federation behavior
 
 An optional Docker-based Delta Lake smoke test is available for the production
-shape where a small federated Trino 481 cluster queries a separate Trino 481
+shape where a small federated Trino 448 cluster queries a separate Trino 448
 cluster with a Delta Lake catalog. It is intentionally outside the default
 ``mvn verify`` path and is documented in ``docs/delta-smoke.md``.

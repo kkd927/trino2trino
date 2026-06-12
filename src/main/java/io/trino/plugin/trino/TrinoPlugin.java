@@ -20,6 +20,6 @@ public class TrinoPlugin
 {
     public TrinoPlugin()
     {
-        super("trino", TrinoClientModule::new);
+        super("trino", new TrinoClientModule());
     }
 }

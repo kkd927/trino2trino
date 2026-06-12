@@ -53,7 +53,6 @@ import io.trino.spi.TrinoException;
 import io.trino.spi.connector.AggregateFunction;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ColumnMetadata;
-import io.trino.spi.connector.ColumnPosition;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorTableMetadata;
 import io.trino.spi.connector.JoinStatistics;
@@ -69,7 +68,6 @@ import io.trino.spi.statistics.TableStatistics;
 import io.trino.spi.type.CharType;
 import io.trino.spi.type.DateType;
 import io.trino.spi.type.DecimalType;
-import io.trino.spi.type.NumberType;
 import io.trino.spi.type.TimeType;
 import io.trino.spi.type.TimeWithTimeZoneType;
 import io.trino.spi.type.TimestampType;
@@ -94,7 +92,6 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
-import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static io.trino.matching.Pattern.typeOf;
@@ -310,20 +307,6 @@ public class TrinoClient
     }
 
     @Override
-    public Optional<JdbcExpression> convertProjection(ConnectorSession session, JdbcTableHandle handle, ConnectorExpression expression, Map<String, ColumnHandle> assignments)
-    {
-        if (!handle.getUpdateAssignments().isEmpty() || assignments.values().stream().anyMatch(TrinoClient::isHiddenJdbcColumn)) {
-            return Optional.empty();
-        }
-        TrinoDelegationAnalyzer.ProjectionAnalysis analysis = delegationAnalyzer.analyzeProjection(session, expression, assignments, getRemoteCapabilities(session));
-        if (analysis.decision() == REMOTE_DELEGATE) {
-            return analysis.expression();
-        }
-        throwIfUnsupported(analysis);
-        return Optional.empty();
-    }
-
-    @Override
     protected boolean isSupportedJoinCondition(ConnectorSession session, JdbcJoinCondition joinCondition)
     {
         // Both sides are Trino, so these comparison operators are SQL-compatible
@@ -337,12 +320,6 @@ public class TrinoClient
                  GREATER_THAN_OR_EQUAL,
                  IDENTICAL -> true;
         };
-    }
-
-    @Override
-    public boolean supportsMerge()
-    {
-        return false;
     }
 
     @Override
@@ -428,7 +405,7 @@ public class TrinoClient
     public JdbcTableHandle getTableHandle(ConnectorSession session, PreparedQuery preparedQuery)
     {
         passthroughCatalogEnforcer.validate(stripTrailingSemicolon(preparedQuery.query()));
-        try (Connection connection = getConnection(session)) {
+        try (Connection connection = connectionFactory.openConnection(session)) {
             List<PassthroughQueryMetadataHelper.DescribedOutputColumn> outputColumns = passthroughQueryMetadataHelper.describeOutputColumns(connection, preparedQuery);
             PreparedQuery addressableQuery = passthroughQueryMetadataHelper.withOutputAliases(preparedQuery, outputColumns);
             JdbcTableHandle tableHandle;
@@ -462,7 +439,7 @@ public class TrinoClient
         }
 
         String statsQuery = "SHOW STATS FOR " + quoted(handle.getRequiredNamedRelation().getRemoteTableName());
-        try (Connection connection = getConnection(session)) {
+        try (Connection connection = connectionFactory.openConnection(session)) {
             logRemoteVersionOnce(connection);
             try (PreparedStatement statement = connection.prepareStatement(statsQuery);
                     ResultSet resultSet = statement.executeQuery()) {
@@ -545,9 +522,6 @@ public class TrinoClient
             }
             return WriteMapping.objectMapping(dataType, longDecimalWriteFunction(decimalType));
         }
-        if (type instanceof NumberType) {
-            return TrinoNumberCodec.numberWriteMapping();
-        }
         if (type instanceof CharType || type instanceof VarcharType) {
             return WriteMapping.sliceMapping("varchar", (statement, index, value) -> statement.setString(index, value.toStringUtf8()));
         }
@@ -558,17 +532,9 @@ public class TrinoClient
             return WriteMapping.longMapping("date", io.trino.plugin.jdbc.StandardColumnMappings.dateWriteFunctionUsingLocalDate());
         }
         if (type instanceof TimeType timeType) {
-            return WriteMapping.longMapping("time(" + timeType.getPrecision() + ")", io.trino.plugin.jdbc.StandardColumnMappings.timeWriteFunction(timeType.getPrecision()));
+            return WriteMapping.longMapping("time(" + timeType.getPrecision() + ")", TemporalTransportCodec.timeTransportWriteFunction(timeType));
         }
         if (type instanceof TimestampType timestampType) {
-            if (timestampType.isShort()) {
-                return WriteMapping.longMapping("timestamp(" + timestampType.getPrecision() + ")", io.trino.plugin.jdbc.StandardColumnMappings.timestampWriteFunction(timestampType));
-            }
-            if (timestampType.getPrecision() <= 9) {
-                return WriteMapping.objectMapping(
-                        "timestamp(" + timestampType.getPrecision() + ")",
-                        io.trino.plugin.jdbc.StandardColumnMappings.longTimestampWriteFunction(timestampType, timestampType.getPrecision()));
-            }
             return TemporalTransportCodec.timestampWriteMapping(timestampType);
         }
         if (type instanceof TimestampWithTimeZoneType timestampWithTimeZoneType) {
@@ -590,7 +556,7 @@ public class TrinoClient
     }
 
     @Override
-    public JdbcOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, Consumer<Runnable> rollbackActionCollector)
+    public JdbcOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata)
     {
         throw new TrinoException(NOT_SUPPORTED, "This connector does not support creating tables with data");
     }
@@ -602,7 +568,7 @@ public class TrinoClient
     }
 
     @Override
-    public void addColumn(ConnectorSession session, JdbcTableHandle handle, ColumnMetadata column, ColumnPosition position)
+    public void addColumn(ConnectorSession session, JdbcTableHandle handle, ColumnMetadata column)
     {
         throw new TrinoException(NOT_SUPPORTED, "This connector does not support adding columns");
     }
@@ -738,7 +704,7 @@ public class TrinoClient
         }
 
         TrinoRemoteCapabilities loaded;
-        try (Connection connection = getConnection(session)) {
+        try (Connection connection = connectionFactory.openConnection(session)) {
             loaded = TrinoRemoteCapabilities.load(connection);
             loaded.version().ifPresent(version -> {
                 if (remoteVersionLogged.compareAndSet(false, true)) {

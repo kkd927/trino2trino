@@ -19,7 +19,6 @@ import io.trino.spi.type.CharType;
 import io.trino.spi.type.DateType;
 import io.trino.spi.type.DecimalType;
 import io.trino.spi.type.MapType;
-import io.trino.spi.type.NumberType;
 import io.trino.spi.type.RowType;
 import io.trino.spi.type.TimeType;
 import io.trino.spi.type.TimeWithTimeZoneType;
@@ -151,11 +150,6 @@ final class TrinoTypeClassifier
         return type.getTypeSignature().getBase().equals("ipaddress");
     }
 
-    static boolean isNumberType(Type type)
-    {
-        return type.getTypeSignature().getBase().equals(NumberType.NAME);
-    }
-
     static TransportKind transportKind(Type type)
     {
         if (requiresVarbinaryTransport(type)) {
@@ -209,7 +203,7 @@ final class TrinoTypeClassifier
         if (type instanceof CharType || type instanceof VarcharType || type instanceof VarbinaryType || type instanceof DateType || type instanceof DecimalType || type instanceof UuidType) {
             return true;
         }
-        return isJsonType(type) || isIpAddressType(type) || isNumberType(type);
+        return isJsonType(type) || isIpAddressType(type);
     }
 
     private static boolean supportsStringSurrogateLeafType(Type type)

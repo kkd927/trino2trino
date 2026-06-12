@@ -37,7 +37,6 @@ import io.trino.spi.type.DateType;
 import io.trino.spi.type.DecimalType;
 import io.trino.spi.type.DoubleType;
 import io.trino.spi.type.IntegerType;
-import io.trino.spi.type.NumberType;
 import io.trino.spi.type.RealType;
 import io.trino.spi.type.RowType;
 import io.trino.spi.type.SmallintType;
@@ -194,9 +193,6 @@ final class TrinoRemoteSqlRenderer
                     Optional.empty(),
                     Optional.empty());
         }
-        if (type instanceof NumberType) {
-            return new JdbcTypeHandle(Types.OTHER, Optional.of("number"), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty());
-        }
         if (type instanceof CharType charType) {
             return new JdbcTypeHandle(Types.CHAR, Optional.of(type.getDisplayName()), Optional.of(charType.getLength()), Optional.empty(), Optional.empty(), Optional.empty());
         }
@@ -257,8 +253,14 @@ final class TrinoRemoteSqlRenderer
 
     private static String bindExpression(Type type)
     {
-        if (type instanceof NumberType) {
-            return "CAST(? AS " + NumberType.NAME + ")";
+        if (type instanceof TimeType || type instanceof TimestampType || type instanceof TimestampWithTimeZoneType || type instanceof TimeWithTimeZoneType) {
+            return "CAST(? AS " + typeName(type) + ")";
+        }
+        if (TrinoTypeClassifier.isIntervalYearToMonthType(type)) {
+            return "INTERVAL '1' MONTH * CAST(? AS INTEGER)";
+        }
+        if (TrinoTypeClassifier.isIntervalDayToSecondType(type)) {
+            return "parse_duration(?)";
         }
         return "?";
     }
