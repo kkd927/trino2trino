@@ -134,44 +134,67 @@ commands.
    `remote_existing_tags`, and `existing_tags`, then print only the re-release
    command using `next_tag`, after switching/updating that existing release
    branch manually.
-2. Create and switch to the backport branch from `main`:
+2. Before branching or editing, run a backport impact review from `main`:
+
+   ```bash
+   "${skill_dir}/scripts/backport-impact.sh" "$requested_version" "$current_version"
+   ```
+
+   Use the helper output as evidence, not as an automatic decision. Review
+   official release notes in `(N, M]` for features added after N that current
+   `main` may depend on. Prioritize `Add the ... type`, `Add support for`,
+   `Breaking change`, `Remove`, `Defunct`, `SPI`, `JDBC driver`, Base JDBC,
+   connector API, configuration property, and Airlift lines. Search current
+   source, tests, docs, and smoke configs for matching Trino APIs, types,
+   properties, and EXPLAIN markers. Classify each likely issue before editing:
+   - `must-remove`: type/API/feature first introduced after N, so unavailable in N.
+   - `signature-risk`: connector or SPI method signatures changed across the gap.
+   - `runtime-config-risk`: Docker/catalog/session properties may not exist in N.
+   - `test-expectation-risk`: plan text or pushdown markers differ by version.
+   - `needs-compile-confirmation`: release notes are suggestive but not decisive.
+
+   Summarize expected removals/adaptations to the user before the version bump.
+   For example, if release notes say a type was added in a version greater than
+   N and current code references that type, plan to remove or disable it on the
+   backport branch, then confirm with the target Trino artifacts and compiler.
+3. Create and switch to the backport branch from `main`:
 
    ```bash
    git switch -c "release/trino-N"
    ```
 
-3. Run:
+4. Run:
 
    ```bash
    "${skill_dir}/scripts/bump-version.sh" "$current_version" "$requested_version" "$target_jdk"
    ```
 
-4. Run `.github/scripts/bootstrap-trino-deps.sh`.
-5. Build in two stages:
+5. Run `.github/scripts/bootstrap-trino-deps.sh`.
+6. Build in two stages:
 
    ```bash
    mvn clean verify -DskipTests -Dair.check.skip-all=true
    mvn clean verify
    ```
 
-6. If compilation fails because current `main` code uses APIs missing from Trino
-   N, inspect only the necessary release notes in `(N, M]` in reverse,
-   error-driven order. For large gaps, do not fetch every release note up front.
-   Make the minimal compatibility changes required. If the full verify fails
-   only because `airstyle:check` reports formatting drift, run
+7. Use the impact review and the actual compiler/test errors to make the minimal
+   compatibility changes required. If compilation fails because current `main`
+   code uses APIs missing from Trino N, inspect only the additional release notes
+   or upstream sources needed to explain the failing symbols. If the full verify
+   fails only because `airstyle:check` reports formatting drift, run
    `mvn airstyle:format`, review the resulting diff, then rerun
    `mvn clean verify`. If Checkstyle reports a mechanical
    source-modernization rule from the selected Trino/Airlift parent, make the
    smallest syntax-only change and rerun the failing Maven stage.
-7. Commit on the backport branch:
+8. Commit on the backport branch:
 
    ```bash
    git commit -am "Build against Trino N"
    ```
 
    Include new files with `git add` first if code adaptation created them.
-8. Final report:
-   - summarize changes and tests;
+9. Final report:
+   - summarize changes, tests, and release-note evidence that affected code;
    - print `git push origin release/trino-N`;
    - print `git tag <next_tag> && git push origin <next_tag>`;
    - state that `main` was not changed and pushing the tag triggers GitHub
