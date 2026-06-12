@@ -54,9 +54,8 @@ local_java_major() {
   fi
 }
 
-join_by_comma() {
-  local IFS=,
-  printf '%s' "$*"
+join_lines_by_comma() {
+  awk 'NF { if (seen) printf ","; printf "%s", $0; seen = 1 }'
 }
 
 requested_version="${1:-}"
@@ -180,57 +179,39 @@ else
   preserve_branch_push_needed="false"
 fi
 
-remote_tags=()
-while IFS= read -r tag; do
-  remote_tags+=("$tag")
-done < <(
+remote_tags="$(
   git ls-remote --tags --refs origin "trino-${requested_version}-r*" |
     awk '{print $2}' |
     sed 's#refs/tags/##' |
     sort -u
-)
+)"
 
-local_tags=()
-while IFS= read -r tag; do
-  local_tags+=("$tag")
-done < <(
+local_tags="$(
   git tag --list "trino-${requested_version}-r*" |
     sort -u
-)
+)"
 
-all_tags=()
-while IFS= read -r tag; do
-  [[ -n "$tag" ]] && all_tags+=("$tag")
-done < <(
+all_tags="$(
   {
-    printf '%s\n' "${local_tags[@]}"
-    printf '%s\n' "${remote_tags[@]}"
+    printf '%s\n' "$local_tags"
+    printf '%s\n' "$remote_tags"
   } |
+    sed '/^$/d' |
     sort -u
-)
+)"
 
-local_existing_tags=""
-if (( ${#local_tags[@]} > 0 )); then
-  local_existing_tags="$(join_by_comma "${local_tags[@]}")"
-fi
-
-remote_existing_tags=""
-if (( ${#remote_tags[@]} > 0 )); then
-  remote_existing_tags="$(join_by_comma "${remote_tags[@]}")"
-fi
-
-existing_tags=""
-if (( ${#all_tags[@]} > 0 )); then
-  existing_tags="$(join_by_comma "${all_tags[@]}")"
-fi
+local_existing_tags="$(printf '%s\n' "$local_tags" | join_lines_by_comma)"
+remote_existing_tags="$(printf '%s\n' "$remote_tags" | join_lines_by_comma)"
+existing_tags="$(printf '%s\n' "$all_tags" | join_lines_by_comma)"
 
 max_release=0
-for tag in ${all_tags[@]+"${all_tags[@]}"}; do
+while IFS= read -r tag; do
+  [[ -n "$tag" ]] || continue
   suffix="${tag#trino-${requested_version}-r}"
   if [[ "$suffix" =~ ^[0-9]+$ ]] && (( suffix > max_release )); then
     max_release="$suffix"
   fi
-done
+done <<< "$all_tags"
 next_tag="trino-${requested_version}-r$((max_release + 1))"
 
 cat <<EOF
