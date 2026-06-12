@@ -190,13 +190,42 @@ done < <(
     sort -u
 )
 
-existing_tags=""
+local_tags=()
+while IFS= read -r tag; do
+  local_tags+=("$tag")
+done < <(
+  git tag --list "trino-${requested_version}-r*" |
+    sort -u
+)
+
+all_tags=()
+while IFS= read -r tag; do
+  [[ -n "$tag" ]] && all_tags+=("$tag")
+done < <(
+  {
+    printf '%s\n' "${local_tags[@]}"
+    printf '%s\n' "${remote_tags[@]}"
+  } |
+    sort -u
+)
+
+local_existing_tags=""
+if (( ${#local_tags[@]} > 0 )); then
+  local_existing_tags="$(join_by_comma "${local_tags[@]}")"
+fi
+
+remote_existing_tags=""
 if (( ${#remote_tags[@]} > 0 )); then
-  existing_tags="$(join_by_comma "${remote_tags[@]}")"
+  remote_existing_tags="$(join_by_comma "${remote_tags[@]}")"
+fi
+
+existing_tags=""
+if (( ${#all_tags[@]} > 0 )); then
+  existing_tags="$(join_by_comma "${all_tags[@]}")"
 fi
 
 max_release=0
-for tag in ${remote_tags[@]+"${remote_tags[@]}"}; do
+for tag in ${all_tags[@]+"${all_tags[@]}"}; do
   suffix="${tag#trino-${requested_version}-r}"
   if [[ "$suffix" =~ ^[0-9]+$ ]] && (( suffix > max_release )); then
     max_release="$suffix"
@@ -223,6 +252,8 @@ release_branch_for_current_exists_origin=${release_branch_for_current_exists_ori
 release_branch_for_current_local_sha=${release_branch_for_current_local_sha}
 release_branch_for_current_origin_sha=${release_branch_for_current_origin_sha}
 preserve_branch_push_needed=${preserve_branch_push_needed}
+local_existing_tags=${local_existing_tags}
+remote_existing_tags=${remote_existing_tags}
 existing_tags=${existing_tags}
 next_tag=${next_tag}
 EOF

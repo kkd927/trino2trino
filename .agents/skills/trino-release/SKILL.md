@@ -15,6 +15,7 @@ commands.
 - Work only in this repository.
 - Stop on dirty working trees, unsynchronized `main`, missing Trino versions, or
   missing/incompatible local JDKs.
+- Inspect both local and remote `trino-N-rK` tags before reporting the next tag.
 - Use `release/trino-N` branches and `trino-N-rK` tags in reports, but do not
   create or push tags.
 - Start backports from `main`, not from an existing older release branch.
@@ -49,7 +50,9 @@ commands.
    `release_branch_for_current_exists_origin`,
    `release_branch_for_current_local_sha`,
    `release_branch_for_current_origin_sha`, `preserve_branch_push_needed`,
-   `existing_tags`, and `next_tag`.
+   `local_existing_tags`, `remote_existing_tags`, `existing_tags`, and
+   `next_tag`. `existing_tags` is the de-duplicated union of local and remote
+   release tags.
 6. Enforce the common JDK gate before editing:
    if `local_java_major != target_jdk`, tell the user to install/select the
    target major JDK, for example with `sdk install java <major>` or
@@ -127,9 +130,10 @@ commands.
 ## Case B: Backport (`requested_version < current_version`)
 
 1. If either `release_branch_exists_local=true` or
-   `release_branch_exists_origin=true`, stop. Report `existing_tags` and print
-   only the re-release command using `next_tag`, after switching/updating that
-   existing release branch manually.
+   `release_branch_exists_origin=true`, stop. Report `local_existing_tags`,
+   `remote_existing_tags`, and `existing_tags`, then print only the re-release
+   command using `next_tag`, after switching/updating that existing release
+   branch manually.
 2. Create and switch to the backport branch from `main`:
 
    ```bash
