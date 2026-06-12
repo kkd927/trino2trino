@@ -304,48 +304,6 @@ class TestTrinoTypeMapping
     }
 
     @Test
-    void testNumberNativeType()
-    {
-        MaterializedResult result = computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_number");
-        assertThat(result.getOnlyColumnAsSet())
-                .containsExactlyInAnyOrder("0.1", "3.1415", "20050910133100123");
-    }
-
-    @Test
-    void testDescribeNumber()
-    {
-        MaterializedResult result = computeActual("DESCRIBE remote.default.test_number");
-        String typeStr = result.getMaterializedRows().get(0).getField(1).toString();
-        assertThat(typeStr).isEqualTo("number");
-    }
-
-    @Test
-    void testNumberPredicatePushdown()
-    {
-        MaterializedResult result = computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_number WHERE x = NUMBER '0.1'");
-        assertThat(result.getOnlyValue()).isEqualTo("0.1");
-    }
-
-    @Test
-    void testNumberDelegatedExpressionWithConstant()
-    {
-        String sql = "SELECT CAST(x + NUMBER '1' AS VARCHAR) FROM remote.default.test_number WHERE x = NUMBER '0.1'";
-        MaterializedResult result = computeActual(sql);
-        assertThat(result.getOnlyValue()).isEqualTo("1.1");
-
-        String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
-        assertThat(explain).contains("RemoteTrinoQuery[catalog=memory, delegated=true]");
-    }
-
-    @Test
-    void testNumberSpecialValues()
-    {
-        MaterializedResult result = computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_number_special");
-        assertThat(result.getOnlyColumnAsSet())
-                .containsExactlyInAnyOrder("NaN", "+Infinity", "-Infinity");
-    }
-
-    @Test
     void testBooleanRoundTrip()
     {
         MaterializedResult result = computeActual("SELECT x FROM remote.default.test_boolean ORDER BY x");
@@ -660,7 +618,7 @@ class TestTrinoTypeMapping
         assertThat(describe.getRowCount()).isEqualTo(2);
         assertThat(describe.getMaterializedRows()).anySatisfy(row -> {
             assertThat(row.getField(0)).isEqualTo("unsupported_col");
-            assertThat(row.getField(1).toString()).isEqualTo("row(\"x\" interval day to second)");
+            assertThat(row.getField(1).toString()).isEqualTo("row(x interval day to second)");
         });
         assertThat(computeActual(
                 """

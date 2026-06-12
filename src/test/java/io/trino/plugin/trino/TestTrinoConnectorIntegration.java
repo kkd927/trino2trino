@@ -464,19 +464,6 @@ public class TestTrinoConnectorIntegration
     }
 
     @Test
-    void testQueryPassthroughNumberResult()
-    {
-        MaterializedResult result = computeActual(
-                """
-                SELECT CAST(x AS VARCHAR)
-                FROM TABLE(remote.system.query(
-                    query => 'SELECT NUMBER ''0.1'' AS x'
-                ))
-                """);
-        assertThat(result.getOnlyValue()).isEqualTo("0.1");
-    }
-
-    @Test
     void testQueryPassthroughUnsupportedStructuralResult()
     {
         MaterializedResult result = computeActual(
@@ -644,7 +631,10 @@ public class TestTrinoConnectorIntegration
         assertThat(result.getOnlyColumnAsSet()).containsExactly("100", "200");
 
         String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
-        assertThat(explain).contains("RemoteTrinoQuery[catalog=memory, delegated=true]");
+        assertThat(explain)
+                .contains("CAST(\"log_timestamp\" AS timestamp(3)) >= CAST(? AS timestamp(3))")
+                .contains("regexp_like(\"path\", ?)")
+                .contains("from_iso8601_timestamp(\"iso_timestamp\")");
         assertThat(explain).doesNotContain("ScanFilterProject");
     }
 

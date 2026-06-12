@@ -180,6 +180,16 @@ class TestTrinoConnectorTest
                 .build();
     }
 
+    @Override
+    protected Session joinPushdownEnabled(Session session)
+    {
+        Session joinPushdownSession = super.joinPushdownEnabled(session);
+        String catalog = joinPushdownSession.getCatalog().orElseThrow();
+        return Session.builder(joinPushdownSession)
+                .setCatalogSessionProperty(catalog, "join_pushdown_strategy", "EAGER")
+                .build();
+    }
+
     private Session eagerJoinPushdownSession(boolean complexJoinPushdownEnabled)
     {
         Session session = joinPushdownEnabled(getSession());
@@ -614,7 +624,6 @@ class TestTrinoConnectorTest
     }
 
     @Test
-    @Override
     public void testLimitPushdownWithDistinctAndJoin()
     {
         MaterializedResult result = computeActual(
@@ -631,21 +640,18 @@ class TestTrinoConnectorTest
     // =========================================================================
 
     @Test
-    @Override
     public void testExecuteProcedure()
     {
         abort("No procedure support through federation");
     }
 
     @Test
-    @Override
     public void testExecuteProcedureWithNamedArgument()
     {
         abort("No procedure support through federation");
     }
 
     @Test
-    @Override
     public void testExecuteProcedureWithInvalidQuery()
     {
         abort("No procedure support through federation");

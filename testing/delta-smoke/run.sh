@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 compose_file="${repo_root}/testing/delta-smoke/docker-compose.yml"
 project_name="${DELTA_SMOKE_PROJECT_NAME:-trino2trino-delta-smoke}"
-plugin_dir="${repo_root}/target/trino-trino-481"
+plugin_dir="${repo_root}/target/trino-trino-448"
 
 if [[ ! -d "${plugin_dir}" ]]; then
   echo "Missing ${plugin_dir}. Build the plugin first:"
@@ -81,6 +81,23 @@ assert_query_contains() {
   fi
 }
 
+assert_query_contains_all() {
+  local sql="$1"
+  shift
+  local actual
+  actual="$(trino_exec trino-local-delta "${sql}")"
+  for needle in "$@"; do
+    if [[ "${actual}" != *"${needle}"* ]]; then
+      echo "Assertion failed"
+      echo "SQL: ${sql}"
+      echo "Expected output to contain: ${needle}"
+      echo "Actual output:"
+      echo "${actual}"
+      exit 1
+    fi
+  done
+}
+
 echo "Starting Delta smoke stack"
 compose down -v --remove-orphans >/dev/null 2>&1 || true
 compose up -d
@@ -104,7 +121,14 @@ assert_query_equals "2	gold	7	12345678901234567890.1234" "SELECT cardinality(tag
 assert_query_equals "3" "SELECT count(*) FROM (VALUES BIGINT '1', BIGINT '3') AS local_keys(custkey) JOIN remote_delta.smoke.orders o ON o.custkey = local_keys.custkey"
 assert_query_equals "3" "SELECT count(*) FROM remote_delta.smoke.orders o JOIN remote_delta.smoke.customers c ON o.custkey = c.custkey WHERE c.region IN ('AMERICA', 'ASIA')"
 assert_query_equals "2" "SELECT count(*) FROM TABLE(remote_delta.system.query(query => 'SELECT orderkey FROM delta.smoke.orders WHERE ds = ''2026-01-01'''))"
-assert_query_contains "RemoteTrinoQuery[catalog=delta, delegated=true]" "EXPLAIN SELECT regexp_extract(status, '^(O|C)', 1) FROM remote_delta.smoke.orders WHERE regexp_like(status, '^(OPEN|CLOSED)$') AND ds = '2026-01-01'"
-assert_query_contains "RemoteTrinoQuery[catalog=delta" "EXPLAIN SELECT o.orderkey, c.name FROM remote_delta.smoke.orders o JOIN remote_delta.smoke.customers c ON o.custkey = c.custkey"
+assert_query_contains_all "EXPLAIN SELECT regexp_extract(status, '^(O|C)', 1) FROM remote_delta.smoke.orders WHERE regexp_like(status, '^(OPEN|CLOSED)$') AND ds = '2026-01-01'" \
+  "ScanProject[table = remote_delta:smoke.orders delta.smoke.orders constraint on [ds]" \
+  "expression=regexp_like(\"status\", ?)" \
+  "expr := regexp_extract(status"
+assert_query_contains_all "EXPLAIN SELECT o.orderkey, c.name FROM remote_delta.smoke.orders o JOIN remote_delta.smoke.customers c ON o.custkey = c.custkey" \
+  "remote_delta:Query[" \
+  "RemoteTrinoQuery[catalog=delta, delegated=true]" \
+  "\"delta\".\"smoke\".\"orders\"" \
+  "\"delta\".\"smoke\".\"customers\""
 
 echo "Delta smoke test passed"

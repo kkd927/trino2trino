@@ -59,7 +59,6 @@ import static io.trino.plugin.jdbc.StandardColumnMappings.doubleColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.integerColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.realColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.smallintColumnMapping;
-import static io.trino.plugin.jdbc.StandardColumnMappings.timestampColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.tinyintColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.varbinaryColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.varcharReadFunction;
@@ -94,10 +93,6 @@ final class TrinoReadMappingFactory
         String normalizedTypeName = TrinoJdbcTypeHandleResolver.normalizedTypeName(typeName);
         Type logicalType = typeName.isEmpty() ? null : TrinoTypeNameParser.parseTypeName(typeName, typeManager);
         Optional<ColumnMapping> transportMapping = transportFallbackColumnMapping(logicalType);
-
-        if ((logicalType != null && TrinoTypeClassifier.isNumberType(logicalType)) || normalizedTypeName.equals("number")) {
-            return Optional.of(TrinoNumberCodec.numberColumnMapping());
-        }
 
         return switch (typeHandle.jdbcType()) {
             case Types.BIT, Types.BOOLEAN -> Optional.of(booleanColumnMapping());
@@ -150,10 +145,7 @@ final class TrinoReadMappingFactory
         }
 
         Type resolvedType = logicalType == null ? createTimestampType(timestampPrecision) : logicalType;
-        if (resolvedType instanceof TimestampType timestampType && timestampType.getPrecision() > 9) {
-            return Optional.of(varcharTransportColumnMapping(timestampType));
-        }
-        return Optional.of(timestampColumnMapping(createTimestampType(timestampPrecision)));
+        return Optional.of(varcharTransportColumnMapping((TimestampType) resolvedType));
     }
 
     private Optional<ColumnMapping> timestampWithTimeZoneColumnMapping(JdbcTypeHandle typeHandle, String typeName, Type logicalType)

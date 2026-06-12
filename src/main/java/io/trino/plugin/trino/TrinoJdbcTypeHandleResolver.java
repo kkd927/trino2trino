@@ -41,7 +41,6 @@ final class TrinoJdbcTypeHandleResolver
             case "time with time zone" -> Types.TIME_WITH_TIMEZONE;
             case "timestamp with time zone" -> Types.TIMESTAMP_WITH_TIMEZONE;
             case "varbinary" -> Types.VARBINARY;
-            case "number" -> Types.OTHER;
             case "json", "uuid", "ipaddress", "hyperloglog", "p4hyperloglog", "setdigest", "tdigest" -> Types.JAVA_OBJECT;
             default -> inferJdbcType(normalizedTypeName, parsedType);
         };

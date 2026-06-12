@@ -53,7 +53,7 @@ class TestTrinoUnsupportedTypeHandling
         assertDescribeColumnType("test_setdigest", "x", "setdigest");
         assertDescribeColumnType("test_nested_unsupported_array", "unsupported_col", "array(time(3) with time zone)");
         assertDescribeColumnType("test_nested_unsupported_map", "unsupported_col", "map(varchar(8), interval day to second)");
-        assertDescribeColumnType("test_nested_unsupported_row", "unsupported_col", "row(\"x\" interval day to second)");
+        assertDescribeColumnType("test_nested_unsupported_row", "unsupported_col", "row(x interval day to second)");
     }
 
     private void assertDescribeColumnType(String tableName, String columnName, String expectedType)

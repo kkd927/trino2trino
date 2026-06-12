@@ -19,6 +19,18 @@
     </violation>
 
     <violation>
+        <name>java/lang/String.toLowerCase:()Ljava/lang/String;</name>
+        <version>1.1</version>
+        <comment>Prefer String.toLowerCase(java.util.Locale)</comment>
+    </violation>
+
+    <violation>
+        <name>java/lang/String.toUpperCase:()Ljava/lang/String;</name>
+        <version>1.1</version>
+        <comment>Prefer String.toUpperCase(java.util.Locale)</comment>
+    </violation>
+
+    <violation>
         <name>java/lang/String.toString:()Ljava/lang/String;</name>
         <version>1.1</version>
         <comment>Call to toString() is redundant</comment>
@@ -151,6 +163,36 @@
     </violation>
 
     <violation>
+        <name>com/amazonaws/services/glue/model/Table.getTableType:()Ljava/lang/String;</name>
+        <version>1.1</version>
+        <comment>Table type is nullable in Glue model, which is too easy to forget about. Prefer GlueToTrinoConverter.getTableType</comment>
+    </violation>
+
+    <violation>
+        <name>com/amazonaws/services/glue/model/Column.getParameters:()Ljava/util/Map;</name>
+        <version>1.1</version>
+        <comment>Column parameters map is nullable in Glue model, which is too easy to forget about. Prefer GlueToTrinoConverter.getColumnParameters</comment>
+    </violation>
+
+    <violation>
+        <name>com/amazonaws/services/glue/model/Table.getParameters:()Ljava/util/Map;</name>
+        <version>1.1</version>
+        <comment>Table parameters map is nullable in Glue model, which is too easy to forget about. Prefer GlueToTrinoConverter.getTableParameters</comment>
+    </violation>
+
+    <violation>
+        <name>com/amazonaws/services/glue/model/Partition.getParameters:()Ljava/util/Map;</name>
+        <version>1.1</version>
+        <comment>Partition parameters map is nullable in Glue model, which is too easy to forget about. Prefer GlueToTrinoConverter.getPartitionParameters</comment>
+    </violation>
+
+    <violation>
+        <name>com/amazonaws/services/glue/model/SerDeInfo.getParameters:()Ljava/util/Map;</name>
+        <version>1.1</version>
+        <comment>SerDeInfo parameters map is nullable in Glue model, which is too easy to forget about. Prefer GlueToTrinoConverter.getSerDeInfoParameters</comment>
+    </violation>
+
+    <violation>
         <name>org/apache/hadoop/fs/FileSystem.close:()V</name>
         <version>1.1</version>
         <comment>Hadoop FileSystem instances are shared and should not be closed</comment>
@@ -280,32 +322,5 @@
         <name>com/fasterxml/jackson/core/JsonFactoryBuilder."&lt;init&gt;":()V</name>
         <version>1.8</version>
         <comment>Use io.trino.plugin.base.util.JsonUtils.jsonFactoryBuilder() instead</comment>
-    </violation>
-
-    <violation>
-        <name>software/amazon/awssdk/services/glue/model/Table.tableType:()Ljava/lang/String;</name>
-        <version>1.8</version>
-        <comment>Table type is nullable in Glue model, which is too easy to forget about. Prefer GlueConverter.getTableTypeNullable</comment>
-    </violation>
-
-    <violation>
-        <name>org/assertj/core/util/Files.newTemporaryFile:()Ljava/io/File;</name>
-        <version>1.1</version>
-        <comment>Use @TempDir instead</comment>
-    </violation>
-    <violation>
-        <name>org/assertj/core/util/Files.newTemporaryFolder:()Ljava/io/File;</name>
-        <version>1.1</version>
-        <comment>Use @TempDir instead</comment>
-    </violation>
-    <violation>
-        <name>org/assertj/core/util/Files.temporaryFolder:()Ljava/io/File;</name>
-        <version>1.1</version>
-        <comment>Use @TempDir instead</comment>
-    </violation>
-    <violation>
-        <name>org/assertj/core/util/Files.temporaryFolderPath:()Ljava/lang/String;</name>
-        <version>1.1</version>
-        <comment>Use @TempDir instead</comment>
     </violation>
 </modernizer>
