@@ -31,7 +31,7 @@ final class TrinoDelegationAnalyzer
     {
         REMOTE_DELEGATE,
         LOCAL_FALLBACK,
-        UNSUPPORTED
+        UNSUPPORTED,
     }
 
     record ExpressionAnalysis(Decision decision, Optional<ParameterizedExpression> expression, Optional<String> reason) {}

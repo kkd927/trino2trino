@@ -60,9 +60,11 @@ class TestTrinoConnectorTest
         remoteRunner.execute(remoteSession, "CREATE TABLE part AS SELECT * FROM tpch.tiny.part");
         remoteRunner.execute(remoteSession, "CREATE TABLE partsupp AS SELECT * FROM tpch.tiny.partsupp");
         remoteRunner.execute(remoteSession, "CREATE TABLE supplier AS SELECT * FROM tpch.tiny.supplier");
-        remoteRunner.execute(remoteSession,
+        remoteRunner.execute(
+                remoteSession,
                 "CREATE TABLE simple_table AS SELECT * FROM (VALUES BIGINT '1', BIGINT '2') AS t(col)");
-        remoteRunner.execute(remoteSession, """
+        remoteRunner.execute(remoteSession,
+                """
                 CREATE TABLE test_cs_agg_pushdown AS
                 SELECT * FROM (
                     VALUES
@@ -72,7 +74,8 @@ class TestTrinoConnectorTest
                         ('b', CAST('b' AS CHAR(1)), BIGINT '4')
                 ) AS t(a_string, a_char, a_bigint)
                 """);
-        remoteRunner.execute(remoteSession, """
+        remoteRunner.execute(remoteSession,
+                """
                 CREATE TABLE test_case_sensitive_topn_pushdown AS
                 SELECT * FROM (
                     VALUES
@@ -82,7 +85,8 @@ class TestTrinoConnectorTest
                         ('b', CAST('b' AS CHAR(10)), BIGINT '4')
                 ) AS t(a_string, a_char, a_bigint)
                 """);
-        remoteRunner.execute(remoteSession, """
+        remoteRunner.execute(remoteSession,
+                """
                 CREATE TABLE test_null_sensitive_topn_pushdown AS
                 SELECT * FROM (
                     VALUES
@@ -92,14 +96,16 @@ class TestTrinoConnectorTest
                         ('null', CAST(NULL AS BIGINT))
                 ) AS t(name, a)
                 """);
-        remoteRunner.execute(remoteSession, """
+        remoteRunner.execute(remoteSession,
+                """
                 CREATE TABLE native_query_unsupported AS
                 SELECT
                     CAST(1 AS BIGINT) AS one,
                     CAST(TIMESTAMP '2024-01-15 10:30:45.123456789012' AS TIMESTAMP(12)) AS two,
                     CAST('ok' AS VARCHAR) AS three
                 """);
-        remoteRunner.execute(remoteSession, """
+        remoteRunner.execute(remoteSession,
+                """
                 CREATE TABLE test_decimal_filter_pushdown AS
                 SELECT * FROM (
                     VALUES
@@ -107,7 +113,8 @@ class TestTrinoConnectorTest
                         ('high', CAST(123.456 AS DECIMAL(10, 3)))
                 ) AS t(id, amount)
                 """);
-        remoteRunner.execute(remoteSession, """
+        remoteRunner.execute(remoteSession,
+                """
                 CREATE TABLE test_timestamp12_filter_pushdown AS
                 SELECT * FROM (
                     VALUES
@@ -115,7 +122,8 @@ class TestTrinoConnectorTest
                         ('after', CAST(TIMESTAMP '2024-01-15 10:30:45.123456789012' AS TIMESTAMP(12)))
                 ) AS t(id, ts_col)
                 """);
-        remoteRunner.execute(remoteSession, """
+        remoteRunner.execute(remoteSession,
+                """
                 CREATE TABLE test_timestamptz12_filter_pushdown AS
                 SELECT * FROM (
                     VALUES
@@ -123,7 +131,8 @@ class TestTrinoConnectorTest
                         ('after', CAST(TIMESTAMP '2024-01-15 10:30:45.123456789012 UTC' AS TIMESTAMP(12) WITH TIME ZONE))
                 ) AS t(id, ts_tz_col)
                 """);
-        remoteRunner.execute(remoteSession, """
+        remoteRunner.execute(remoteSession,
+                """
                 CREATE TABLE test_interval_filter_pushdown AS
                 SELECT * FROM (
                     VALUES
@@ -131,7 +140,8 @@ class TestTrinoConnectorTest
                         ('long', INTERVAL '2' DAY)
                 ) AS t(id, duration)
                 """);
-        remoteRunner.execute(remoteSession, """
+        remoteRunner.execute(remoteSession,
+                """
                 CREATE TABLE test_interval_ym_filter_pushdown AS
                 SELECT * FROM (
                     VALUES
@@ -139,7 +149,8 @@ class TestTrinoConnectorTest
                         ('fourteen_months', INTERVAL '14' MONTH)
                 ) AS t(id, duration)
                 """);
-        remoteRunner.execute(remoteSession, """
+        remoteRunner.execute(remoteSession,
+                """
                 CREATE TABLE test_timetz_filter_pushdown AS
                 SELECT * FROM (
                     VALUES
@@ -509,7 +520,8 @@ class TestTrinoConnectorTest
     @Override
     public void testComplexJoinPushdown()
     {
-        String query = """
+        String query =
+                """
                 SELECT n.name, o.orderstatus
                 FROM nation n
                 JOIN orders o ON n.regionkey = o.orderkey
@@ -605,7 +617,8 @@ class TestTrinoConnectorTest
     @Override
     public void testLimitPushdownWithDistinctAndJoin()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT DISTINCT n.name
                 FROM nation n
                 JOIN region r ON n.regionkey = r.regionkey

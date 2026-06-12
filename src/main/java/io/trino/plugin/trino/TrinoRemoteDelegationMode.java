@@ -17,5 +17,5 @@ public enum TrinoRemoteDelegationMode
 {
     AUTO,
     OFF,
-    STRICT
+    STRICT,
 }

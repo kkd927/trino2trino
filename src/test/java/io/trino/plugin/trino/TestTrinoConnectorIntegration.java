@@ -168,7 +168,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testCrossCatalogJoin()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT r.name AS remote_name, l.name AS local_name
                 FROM remote.default.region r
                 JOIN tpch.tiny.region l ON r.regionkey = l.regionkey
@@ -184,7 +185,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testCrossCatalogJoinWithFilter()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT n.name
                 FROM remote.default.nation n
                 JOIN tpch.tiny.region r ON n.regionkey = r.regionkey
@@ -301,7 +303,8 @@ public class TestTrinoConnectorIntegration
     void testRowContainingArrayOfMap()
     {
         // row(svc varchar, evts array(map(varchar, varchar))) — nested complex type
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT
                     d.svc,
                     element_at(evt, 'type') AS evt_type
@@ -319,7 +322,8 @@ public class TestTrinoConnectorIntegration
     void testCrossJoinWithNestedUnnest()
     {
         // Full scenario: UNNEST complex type from remote + JOIN with local tpch
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT
                     element_at(evt, 'post_id') AS post_id,
                     n.name AS nation_name
@@ -375,7 +379,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testQueryPassthrough()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT * FROM TABLE(remote.system.query(
                     query => 'SELECT nationkey, name FROM memory.default.nation ORDER BY nationkey LIMIT 3'
                 ))
@@ -386,7 +391,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testQueryPassthroughWithAnonymousOutput()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT *
                 FROM TABLE(remote.system.query(
                     query => 'SELECT count(*) FROM memory.default.nation'
@@ -398,7 +404,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testQueryPassthroughCanUseFullyQualifiedRemoteSql()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT *
                 FROM TABLE(remote.system.query(
                     query => 'SELECT name FROM memory.default.nation WHERE nationkey = 0'
@@ -410,7 +417,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testQueryPassthroughRejectsOtherRemoteCatalog()
     {
-        assertThatThrownBy(() -> computeActual("""
+        assertThatThrownBy(() -> computeActual(
+                """
                 SELECT *
                 FROM TABLE(remote.system.query(
                     query => 'SELECT name FROM tpch.tiny.nation WHERE nationkey = 0'
@@ -422,7 +430,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testQueryPassthroughWithCte()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT *
                 FROM TABLE(remote.system.query(
                     query => 'WITH ranked AS (
@@ -440,7 +449,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testQueryPassthroughWithWindowFunction()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT *
                 FROM TABLE(remote.system.query(
                     query => 'SELECT name, row_number() OVER (ORDER BY nationkey) AS rn
@@ -456,7 +466,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testQueryPassthroughNumberResult()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT CAST(x AS VARCHAR)
                 FROM TABLE(remote.system.query(
                     query => 'SELECT NUMBER ''0.1'' AS x'
@@ -468,7 +479,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testQueryPassthroughUnsupportedStructuralResult()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT CAST(element_at(m, 2) AS VARCHAR)
                 FROM TABLE(remote.system.query(
                     query => 'SELECT MAP(ARRAY[1, 2], ARRAY[INTERVAL ''1'' DAY, INTERVAL ''2'' DAY]) AS m'
@@ -596,14 +608,16 @@ public class TestTrinoConnectorIntegration
     void testJoinPushdown()
     {
         // Join between two tables on the same remote catalog — verify results match local
-        MaterializedResult remote = computeActual("""
+        MaterializedResult remote = computeActual(
+                """
                 SELECT n.name, r.name AS region_name
                 FROM remote.default.nation n
                 JOIN remote.default.region r ON n.regionkey = r.regionkey
                 WHERE r.name = 'EUROPE'
                 ORDER BY n.name
                 """);
-        MaterializedResult local = computeActual("""
+        MaterializedResult local = computeActual(
+                """
                 SELECT n.name, r.name AS region_name
                 FROM tpch.tiny.nation n
                 JOIN tpch.tiny.region r ON n.regionkey = r.regionkey
@@ -616,7 +630,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testComplexFunctionRemoteDelegation()
     {
-        String sql = """
+        String sql =
+                """
                 SELECT regexp_extract(path, '/post/([0-9]+)', 1)
                 FROM remote.default.test_delegation_log
                 WHERE date_trunc('day', CAST(log_timestamp AS timestamp)) = TIMESTAMP '2024-01-15 00:00:00'
@@ -636,7 +651,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testRemoteSubtreeDelegatedForLocalJoin()
     {
-        String sql = """
+        String sql =
+                """
                 SELECT r.name, pageviews.views
                 FROM tpch.tiny.region r
                 JOIN (
