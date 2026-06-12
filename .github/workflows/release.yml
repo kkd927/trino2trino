@@ -110,3 +110,34 @@ jobs:
               --title "${tag}" \
               --notes-file RELEASE_NOTES.md
           fi
+
+      - name: Update supported release index
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^trino-[0-9]+-r[0-9]+$ ]]; then
+            echo "Skipping RELEASES.md update for ${GITHUB_REF_NAME}."
+            exit 0
+          fi
+
+          github_host="${GITHUB_SERVER_URL#https://}"
+          github_host="${github_host#http://}"
+          default_branch="$(gh api --hostname "${github_host}" "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')"
+
+          git fetch origin "${default_branch}"
+          git checkout -B "${default_branch}" "origin/${default_branch}"
+          git pull --ff-only origin "${default_branch}"
+
+          bash .github/scripts/update-supported-releases.sh
+
+          if [[ -z "$(git status --porcelain -- RELEASES.md)" ]]; then
+            echo "RELEASES.md is already up to date."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add RELEASES.md
+          git commit -m "docs: update supported Trino releases [skip ci]"
+          git push origin "HEAD:${default_branch}"
