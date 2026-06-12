@@ -26,9 +26,12 @@ JOIN remote.schema.table r ON l.id = r.id;
 
 ### 1. Install
 
-Download the plugin ZIP from [GitHub Releases](https://github.com/kkd927/trino2trino/releases) and extract it into the Trino plugin directory:
+Choose the release matching your local Trino version from the
+[supported Trino releases](RELEASES.md), download its plugin ZIP, and extract it
+into the Trino plugin directory:
 
 ```bash
+# Example for Trino 481
 unzip trino-trino-481.zip -d /usr/lib/trino/plugin/trino/
 ```
 
