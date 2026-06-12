@@ -52,7 +52,7 @@ SELECT * FROM trino.tpch.tiny.nation LIMIT 5;
 ## Optional Delta Lake Smoke Test
 
 The default CI does not start Delta Lake infrastructure. To validate the
-packaged plugin against a separate Trino 480 cluster backed by a Delta Lake
+packaged plugin against a separate Trino 481 cluster backed by a Delta Lake
 catalog, run:
 
 ```bash

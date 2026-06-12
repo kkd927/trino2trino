@@ -330,12 +330,12 @@ public class TrinoClient
         // when the planner presents them as connector join conditions.
         return switch (joinCondition.getOperator()) {
             case EQUAL,
-                    NOT_EQUAL,
-                    LESS_THAN,
-                    LESS_THAN_OR_EQUAL,
-                    GREATER_THAN,
-                    GREATER_THAN_OR_EQUAL,
-                    IDENTICAL -> true;
+                 NOT_EQUAL,
+                 LESS_THAN,
+                 LESS_THAN_OR_EQUAL,
+                 GREATER_THAN,
+                 GREATER_THAN_OR_EQUAL,
+                 IDENTICAL -> true;
         };
     }
 

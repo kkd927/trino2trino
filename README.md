@@ -2,7 +2,7 @@
 
 [![Build and Test](https://github.com/kkd927/trino2trino/actions/workflows/build.yml/badge.svg)](https://github.com/kkd927/trino2trino/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Trino](https://img.shields.io/badge/Trino-480-blue)
+![Trino](https://img.shields.io/badge/Trino-481-blue)
 
 A read-only [Trino](https://trino.io/) connector that queries a remote Trino cluster via JDBC.
 
@@ -29,7 +29,7 @@ JOIN remote.schema.table r ON l.id = r.id;
 Download the plugin ZIP from [GitHub Releases](https://github.com/kkd927/trino2trino/releases) and extract it into the Trino plugin directory:
 
 ```bash
-unzip trino-trino-480.zip -d /usr/lib/trino/plugin/trino/
+unzip trino-trino-481.zip -d /usr/lib/trino/plugin/trino/
 ```
 
 ### 2. Configure
@@ -148,7 +148,7 @@ FROM TABLE(
   represented by explicit, compatible SQL expressions.
 - Negative dates (before year 0001) are not preserved correctly through JDBC
 - Cross-cluster joins can only be improved with pushdown and statistics; the connector cannot remove the structural cost of federating between clusters
-- Tested against Trino 480 querying remote Trino 480; cross-version compatibility is not claimed yet
+- Tested against Trino 481 querying remote Trino 481; cross-version compatibility is not claimed yet
 
 ## Contributing
 
@@ -156,7 +156,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for build, test, and development instruct
 
 ### Optional Delta Lake smoke test
 
-The default test suite uses in-process Trino 480 instances with `memory` and
+The default test suite uses in-process Trino 481 instances with `memory` and
 `tpch` catalogs. For the common deployment pattern where a smaller federated
 Trino cluster queries a separate Delta Lake-focused Trino cluster, run the
 optional Docker smoke test:

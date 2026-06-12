@@ -177,7 +177,8 @@ class TestTrinoTypeMapping
     void testNestedComplexTypeRoundTrip()
     {
         // row(svc varchar, evts array(map(varchar, varchar)))
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT
                     d.svc,
                     element_at(evt, 'type') AS evt_type
@@ -197,7 +198,8 @@ class TestTrinoTypeMapping
     @Test
     void testArrayOfTimestamp()
     {
-        MaterializedResult unnested = computeActual("""
+        MaterializedResult unnested = computeActual(
+                """
                 SELECT CAST(e AS VARCHAR)
                 FROM remote.default.test_array_timestamp
                 CROSS JOIN UNNEST(x) AS t(e)
@@ -212,7 +214,8 @@ class TestTrinoTypeMapping
     @Test
     void testArrayOfTimestampWithTimeZone()
     {
-        MaterializedResult unnested = computeActual("""
+        MaterializedResult unnested = computeActual(
+                """
                 SELECT CAST(e AS VARCHAR)
                 FROM remote.default.test_array_tstz
                 CROSS JOIN UNNEST(x) AS t(e)
@@ -595,7 +598,8 @@ class TestTrinoTypeMapping
             assertThat(row.getField(0)).isEqualTo("unsupported_col");
             assertThat(row.getField(1).toString()).isEqualTo("array(time(3) with time zone)");
         });
-        assertThat(computeActual("""
+        assertThat(computeActual(
+                """
                 SELECT CAST(e AS VARCHAR)
                 FROM remote.default.test_nested_unsupported_array
                 CROSS JOIN UNNEST(unsupported_col) AS t(e)
@@ -612,7 +616,8 @@ class TestTrinoTypeMapping
             assertThat(row.getField(1).toString()).contains("map");
             assertThat(row.getField(1).toString()).contains("interval day to second");
         });
-        assertThat(computeActual("""
+        assertThat(computeActual(
+                """
                 SELECT CAST(element_at(unsupported_col, 'duration') AS VARCHAR)
                 FROM remote.default.test_nested_unsupported_map
                 """).getOnlyValue()).isEqualTo("1 00:00:00.000");
@@ -629,7 +634,8 @@ class TestTrinoTypeMapping
             assertThat(row.getField(1).toString()).contains("integer");
             assertThat(row.getField(1).toString()).contains("interval day to second");
         });
-        assertThat(computeActual("""
+        assertThat(computeActual(
+                """
                 SELECT CAST(element_at(unsupported_col, 2) AS VARCHAR)
                 FROM remote.default.test_nested_unsupported_map_int_key
                 """).getOnlyValue()).isEqualTo("2 00:00:00.000");
@@ -638,7 +644,8 @@ class TestTrinoTypeMapping
     @Test
     void testNestedMapWithUnsupportedRowKeyTransport()
     {
-        assertThat(computeActual("""
+        assertThat(computeActual(
+                """
                 SELECT CAST(v AS VARCHAR)
                 FROM remote.default.test_nested_unsupported_map_row_key
                 CROSS JOIN UNNEST(unsupported_col) AS t(k, v)
@@ -655,7 +662,8 @@ class TestTrinoTypeMapping
             assertThat(row.getField(0)).isEqualTo("unsupported_col");
             assertThat(row.getField(1).toString()).isEqualTo("row(\"x\" interval day to second)");
         });
-        assertThat(computeActual("""
+        assertThat(computeActual(
+                """
                 SELECT CAST(unsupported_col.x AS VARCHAR)
                 FROM remote.default.test_nested_unsupported_row
                 """).getOnlyValue()).isEqualTo("1 00:00:00.000");

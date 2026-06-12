@@ -47,14 +47,14 @@ final class TrinoTypeClassifier
         NATIVE,
         VARCHAR_CAST,
         VARBINARY_CAST,
-        JSON_CAST
+        JSON_CAST,
     }
 
     enum SketchTransportKind
     {
         NONE,
         SLICE_BACKED,
-        TDIGEST
+        TDIGEST,
     }
 
     private TrinoTypeClassifier() {}

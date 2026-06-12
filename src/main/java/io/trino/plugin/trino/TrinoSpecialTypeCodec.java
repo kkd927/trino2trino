@@ -61,8 +61,8 @@ final class TrinoSpecialTypeCodec
     {
         if (bytes.length == 4) {
             byte[] ipv6 = new byte[16];
-            ipv6[10] = (byte) 0xff;
-            ipv6[11] = (byte) 0xff;
+            ipv6[10] = (byte) 0xFF;
+            ipv6[11] = (byte) 0xFF;
             System.arraycopy(bytes, 0, ipv6, 12, 4);
             return ipv6;
         }

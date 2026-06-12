@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 compose_file="${repo_root}/testing/delta-smoke/docker-compose.yml"
 project_name="${DELTA_SMOKE_PROJECT_NAME:-trino2trino-delta-smoke}"
-plugin_dir="${repo_root}/target/trino-trino-480"
+plugin_dir="${repo_root}/target/trino-trino-481"
 
 if [[ ! -d "${plugin_dir}" ]]; then
   echo "Missing ${plugin_dir}. Build the plugin first:"
