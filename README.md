@@ -73,7 +73,7 @@ SELECT * FROM remote.schema.table LIMIT 10;
 | `JOIN` (cross-cluster) | Yes | |
 | Predicate pushdown | Partial | Native columns and typed VARCHAR-transport temporal/interval columns only; JSON/VARBINARY transport columns are excluded |
 | Projection pushdown | Yes | Trino-native expressions are delegated when the compatibility registry allows them |
-| Aggregation pushdown | Partial | `count`, `count distinct`, `min/max`, `sum`, `avg` are pushed down; `stddev`, `variance`, `covariance`, `correlation`, `regression` are not |
+| Aggregation pushdown | Partial | `count`, `count distinct`, `count_if`, `checksum`, `min/max`, `sum`, `avg` are pushed down for supported types; `stddev`, `variance`, `covariance`, `correlation`, `regression` are not |
 | `LIMIT` / `ORDER BY ... LIMIT` | Yes | |
 | Same-remote join pushdown | Partial | Supported join shapes only; `IS NOT DISTINCT FROM`, some inequality joins, and some complex joins are not pushed down |
 | `TABLE(system.query(...))` passthrough | Yes | Row-returning read queries only |
@@ -102,7 +102,7 @@ See the [connector reference](docs/src/main/sphinx/connector/trino.md) for detai
 - Predicate pushdown for native columns and typed VARCHAR-transport temporal/interval columns
 - Trino-native expression and projection delegation for compatible casts, arithmetic, comparisons, `LIKE`, `IN`, regexp, JSON, date/time, dereference, and subscript expressions
 - `LIMIT` and `ORDER BY ... LIMIT`
-- Aggregation pushdown for `count`, `count distinct`, `min/max`, `sum`, `avg`
+- Aggregation pushdown for `count`, `count distinct`, `count_if`, `checksum`, `min/max`, `sum`, `avg` on supported types
 - Same-remote join pushdown for supported join shapes
 - Table statistics via `SHOW STATS FOR <table>` on the remote side
 
@@ -129,7 +129,8 @@ FROM TABLE(
 
 - The inner SQL string is sent to remote Trino as written
 - Output columns still go through normal transport rules
-- Table references must stay within the configured remote catalog
+- Table and table function references must stay within the configured remote catalog
+- Nested `system.query` calls inside passthrough SQL are rejected
 - Unlike normal table access, `system.query` is explicit user SQL; remote
   failures are returned directly and are not treated as fallback candidates.
 
@@ -138,17 +139,18 @@ FROM TABLE(
 - Normal table access maps one local catalog to one configured remote catalog
 - All schemas under that remote catalog are exposed through normal metadata and table access
 - Multiple remote catalogs require multiple local catalog property files
-- `system.query` may reference only the configured remote catalog; explicit cross-catalog references are rejected
+- `system.query` may reference only the configured remote catalog; explicit cross-catalog table and table function references and nested `system.query` calls are rejected
 
 ## Limitations
 
 - Read-only connector surface: no `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `CREATE`, `ALTER`, `DROP`
-- `system.query` is documented only for row-returning read queries
+- `system.query` supports only row-returning read queries; DDL, DML, and CALL statements are rejected before remote execution
 - All remote SQL executes as the configured `connection-user`; end-user identity is not propagated
 - Remote session properties and roles are not propagated
-- Session-sensitive functions such as `current_timestamp`, `current_date`, and
-  current time zone functions are not delegated unless their semantics are
-  represented by explicit, compatible SQL expressions.
+- Session-sensitive functions and casts such as `current_timestamp`,
+  `current_date`, current time zone functions, `from_iso8601_timestamp`, and
+  casts that add or remove a session time zone are not delegated unless their
+  semantics are represented by explicit, compatible SQL expressions.
 - Negative dates (before year 0001) are not preserved correctly through JDBC
 - Cross-cluster joins can only be improved with pushdown and statistics; the connector cannot remove the structural cost of federating between clusters
 - Tested against Trino 481 querying remote Trino 481; cross-version compatibility is not claimed yet

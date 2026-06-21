@@ -636,7 +636,6 @@ public class TestTrinoConnectorIntegration
                 FROM remote.default.test_delegation_log
                 WHERE date_trunc('day', CAST(log_timestamp AS timestamp)) = TIMESTAMP '2024-01-15 00:00:00'
                     AND regexp_like(path, '^/post/')
-                    AND CAST(from_iso8601_timestamp(iso_timestamp) AT TIME ZONE 'Asia/Seoul' AS DATE) = DATE '2024-01-15'
                 ORDER BY 1
                 """;
 
@@ -646,6 +645,28 @@ public class TestTrinoConnectorIntegration
         String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
         assertThat(explain).contains("RemoteTrinoQuery[catalog=memory, delegated=true]");
         assertThat(explain).doesNotContain("ScanFilterProject");
+    }
+
+    @Test
+    void testFromIso8601TimestampFallsBackWhenRemoteTimeZoneDiffers()
+    {
+        String sql =
+                """
+                SELECT regexp_extract(path, '/post/([0-9]+)', 1)
+                FROM remote.default.test_delegation_log
+                WHERE date_trunc('day', CAST(log_timestamp AS timestamp)) = TIMESTAMP '2024-01-15 00:00:00'
+                    AND regexp_like(path, '^/post/')
+                    AND CAST(from_iso8601_timestamp(iso_timestamp) AT TIME ZONE 'Asia/Seoul' AS DATE) = DATE '2024-01-15'
+                ORDER BY 1
+                """;
+
+        MaterializedResult result = computeActual(sql);
+        assertThat(result.getOnlyColumnAsSet()).containsExactly("100", "200");
+
+        String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
+        assertThat(explain).doesNotContain("RemoteTrinoQuery[catalog=memory, delegated=true]");
+        assertThat(explain).contains("ScanFilterProject");
+        assertThat(explain).contains("from_iso8601_timestamp");
     }
 
     @Test
@@ -710,5 +731,65 @@ public class TestTrinoConnectorIntegration
     {
         assertThatThrownBy(() -> computeActual("DROP TABLE remote.default.nation"))
                 .hasMessageContaining("does not support dropping tables");
+    }
+
+    @Test
+    void testCreateTableAsSelectBlocked()
+    {
+        assertQueryNotSupported("CREATE TABLE remote.default.should_not_exist_ctas AS SELECT 1 AS value");
+    }
+
+    @Test
+    void testMergeBlocked()
+    {
+        assertQueryNotSupported(
+                """
+                MERGE INTO remote.default.nation target
+                USING (VALUES (BIGINT '0', CAST('ALGERIA' AS VARCHAR), BIGINT '0', CAST('comment' AS VARCHAR))) source(nationkey, name, regionkey, comment)
+                ON target.nationkey = source.nationkey
+                WHEN MATCHED THEN UPDATE SET name = source.name
+                """);
+    }
+
+    @Test
+    void testTruncateBlocked()
+    {
+        assertQueryNotSupported("TRUNCATE TABLE remote.default.nation");
+    }
+
+    @Test
+    void testAlterTableAddColumnBlocked()
+    {
+        assertQueryNotSupported("ALTER TABLE remote.default.nation ADD COLUMN should_not_exist BIGINT");
+    }
+
+    @Test
+    void testCreateSchemaBlocked()
+    {
+        assertQueryNotSupported("CREATE SCHEMA remote.should_not_exist_schema");
+    }
+
+    @Test
+    void testDropSchemaBlocked()
+    {
+        assertQueryNotSupported("DROP SCHEMA remote.empty_schema");
+    }
+
+    @Test
+    void testCreateViewBlocked()
+    {
+        assertQueryNotSupported("CREATE VIEW remote.default.should_not_exist_view AS SELECT 1 AS value");
+    }
+
+    @Test
+    void testCommentOnTableBlocked()
+    {
+        assertQueryNotSupported("COMMENT ON TABLE remote.default.nation IS 'comment'");
+    }
+
+    private void assertQueryNotSupported(String sql)
+    {
+        assertThatThrownBy(() -> computeActual(sql))
+                .hasMessageContaining("not support");
     }
 }

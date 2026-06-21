@@ -19,7 +19,6 @@ import io.trino.spi.TrinoException;
 import io.trino.spi.type.UuidType;
 
 import java.net.InetAddress;
-import java.net.UnknownHostException;
 
 import static io.trino.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
 
@@ -49,10 +48,10 @@ final class TrinoSpecialTypeCodec
             return null;
         }
         try {
-            InetAddress address = InetAddress.getByName(value);
+            InetAddress address = InetAddress.ofLiteral(value);
             return Slices.wrappedBuffer(toCanonicalAddressBytes(address.getAddress()));
         }
-        catch (UnknownHostException e) {
+        catch (IllegalArgumentException e) {
             throw new TrinoException(JDBC_ERROR, "Invalid IP address: " + value, e);
         }
     }

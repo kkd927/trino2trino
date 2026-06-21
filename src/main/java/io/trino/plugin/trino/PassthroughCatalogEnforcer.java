@@ -20,6 +20,7 @@ import io.trino.sql.tree.QualifiedName;
 import io.trino.sql.tree.Query;
 import io.trino.sql.tree.Statement;
 import io.trino.sql.tree.Table;
+import io.trino.sql.tree.TableFunctionInvocation;
 
 import java.util.LinkedHashSet;
 import java.util.Locale;
@@ -46,19 +47,22 @@ final class PassthroughCatalogEnforcer
         }
 
         Set<String> disallowedCatalogs = new LinkedHashSet<>();
+        Set<String> nestedPassthroughQueries = new LinkedHashSet<>();
         new DefaultTraversalVisitor<Set<String>>()
         {
             @Override
             protected Void visitTable(Table node, Set<String> context)
             {
-                QualifiedName name = node.getName();
-                if (name.getParts().size() >= 3) {
-                    String catalog = name.getOriginalParts().getFirst().getCanonicalValue().toLowerCase(Locale.ENGLISH);
-                    if (!catalog.equals(remoteCatalog)) {
-                        context.add(name.toString());
-                    }
-                }
+                rejectDisallowedCatalog(node.getName(), context);
                 return super.visitTable(node, context);
+            }
+
+            @Override
+            protected Void visitTableFunctionInvocation(TableFunctionInvocation node, Set<String> context)
+            {
+                rejectDisallowedCatalog(node.getName(), context);
+                rejectNestedPassthroughQuery(node.getName(), nestedPassthroughQueries);
+                return super.visitTableFunctionInvocation(node, context);
             }
         }.process(query, disallowedCatalogs);
 
@@ -66,6 +70,33 @@ final class PassthroughCatalogEnforcer
             throw new TrinoException(
                     NOT_SUPPORTED,
                     "system.query may reference only the configured remote catalog '" + remoteCatalog + "': " + String.join(", ", disallowedCatalogs));
+        }
+        if (!nestedPassthroughQueries.isEmpty()) {
+            throw new TrinoException(
+                    NOT_SUPPORTED,
+                    "Nested system.query calls are not supported in passthrough SQL: " + String.join(", ", nestedPassthroughQueries));
+        }
+    }
+
+    private void rejectDisallowedCatalog(QualifiedName name, Set<String> disallowedCatalogs)
+    {
+        if (name.getParts().size() >= 3) {
+            String catalog = name.getOriginalParts().getFirst().getCanonicalValue().toLowerCase(Locale.ENGLISH);
+            if (!catalog.equals(remoteCatalog)) {
+                disallowedCatalogs.add(name.toString());
+            }
+        }
+    }
+
+    private static void rejectNestedPassthroughQuery(QualifiedName name, Set<String> nestedPassthroughQueries)
+    {
+        if (name.getParts().size() >= 2) {
+            int size = name.getOriginalParts().size();
+            String schema = name.getOriginalParts().get(size - 2).getCanonicalValue().toLowerCase(Locale.ENGLISH);
+            String function = name.getOriginalParts().get(size - 1).getCanonicalValue().toLowerCase(Locale.ENGLISH);
+            if (schema.equals("system") && function.equals("query")) {
+                nestedPassthroughQueries.add(name.toString());
+            }
         }
     }
 }

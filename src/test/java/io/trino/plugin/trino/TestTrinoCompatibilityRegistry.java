@@ -14,16 +14,28 @@
 package io.trino.plugin.trino;
 
 import io.trino.spi.connector.CatalogSchemaName;
+import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.expression.Call;
+import io.trino.spi.expression.Constant;
 import io.trino.spi.expression.FunctionName;
 import io.trino.spi.expression.StandardFunctions;
+import io.trino.spi.type.Type;
+import io.trino.testing.TestingConnectorSession;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import static io.airlift.slice.Slices.utf8Slice;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
+import static io.trino.spi.type.DateType.DATE;
+import static io.trino.spi.type.TimeType.TIME_MILLIS;
+import static io.trino.spi.type.TimeWithTimeZoneType.TIME_TZ_MILLIS;
+import static io.trino.spi.type.TimeZoneKey.getTimeZoneKey;
+import static io.trino.spi.type.TimestampType.TIMESTAMP_MILLIS;
+import static io.trino.spi.type.TimestampWithTimeZoneType.TIMESTAMP_TZ_MILLIS;
+import static io.trino.spi.type.VarcharType.VARCHAR;
 import static io.trino.testing.TestingConnectorSession.SESSION;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -79,11 +91,116 @@ class TestTrinoCompatibilityRegistry
     {
         assertThat(registry.isVersionAtLeast(Optional.of("477"), 477)).isTrue();
         assertThat(registry.isVersionAtLeast(Optional.of("476-SNAPSHOT"), 477)).isFalse();
-        assertThat(registry.isVersionAtLeast(Optional.empty(), 477)).isTrue();
+        assertThat(registry.isVersionAtLeast(Optional.empty(), 477)).isFalse();
+        assertThat(registry.isVersionAtLeast(Optional.empty(), 0)).isTrue();
+    }
+
+    @Test
+    void testCastAddingSessionTimeZoneDeniedWhenRemoteTimeZoneDiffers()
+    {
+        assertThat(registry.isFunctionSupported(
+                utcSession(),
+                cast(TIMESTAMP_TZ_MILLIS, TIMESTAMP_MILLIS),
+                capabilitiesWithRemoteTimeZone("Asia/Seoul"))).isFalse();
+        assertThat(registry.isFunctionSupported(
+                utcSession(),
+                cast(TIMESTAMP_TZ_MILLIS, DATE),
+                capabilitiesWithRemoteTimeZone("Asia/Seoul"))).isFalse();
+        assertThat(registry.isFunctionSupported(
+                utcSession(),
+                cast(TIME_TZ_MILLIS, TIME_MILLIS),
+                capabilitiesWithRemoteTimeZone("Asia/Seoul"))).isFalse();
+    }
+
+    @Test
+    void testVarcharCastAddingSessionTimeZoneDeniedWhenRemoteTimeZoneDiffers()
+    {
+        assertThat(registry.isFunctionSupported(
+                utcSession(),
+                cast(TIMESTAMP_TZ_MILLIS, VARCHAR),
+                capabilitiesWithRemoteTimeZone("Asia/Seoul"))).isFalse();
+        assertThat(registry.isFunctionSupported(
+                utcSession(),
+                cast(TIME_TZ_MILLIS, VARCHAR),
+                capabilitiesWithRemoteTimeZone("Asia/Seoul"))).isFalse();
+    }
+
+    @Test
+    void testCastRemovingSessionTimeZoneDeniedWhenRemoteTimeZoneDiffers()
+    {
+        assertThat(registry.isFunctionSupported(
+                utcSession(),
+                cast(TIMESTAMP_MILLIS, TIMESTAMP_TZ_MILLIS),
+                capabilitiesWithRemoteTimeZone("Asia/Seoul"))).isFalse();
+        assertThat(registry.isFunctionSupported(
+                utcSession(),
+                cast(DATE, TIMESTAMP_TZ_MILLIS),
+                capabilitiesWithRemoteTimeZone("Asia/Seoul"))).isFalse();
+        assertThat(registry.isFunctionSupported(
+                utcSession(),
+                cast(TIME_MILLIS, TIME_TZ_MILLIS),
+                capabilitiesWithRemoteTimeZone("Asia/Seoul"))).isFalse();
+    }
+
+    @Test
+    void testSessionSensitiveCastAllowedWhenRemoteTimeZoneMatches()
+    {
+        assertThat(registry.isFunctionSupported(
+                utcSession(),
+                cast(TIMESTAMP_TZ_MILLIS, TIMESTAMP_MILLIS),
+                capabilitiesWithRemoteTimeZone("UTC"))).isTrue();
+    }
+
+    @Test
+    void testFromIso8601TimestampDeniedWhenRemoteTimeZoneDiffers()
+    {
+        assertThat(registry.isFunctionSupported(
+                utcSession(),
+                fromIso8601Timestamp(),
+                capabilitiesWithRemoteTimeZone("Asia/Seoul", "from_iso8601_timestamp"))).isFalse();
+    }
+
+    @Test
+    void testFromIso8601TimestampAllowedWhenRemoteTimeZoneMatches()
+    {
+        assertThat(registry.isFunctionSupported(
+                utcSession(),
+                fromIso8601Timestamp(),
+                capabilitiesWithRemoteTimeZone("UTC", "from_iso8601_timestamp"))).isTrue();
     }
 
     private static Call call(String functionName)
     {
         return new Call(BOOLEAN, new FunctionName(functionName), List.of());
+    }
+
+    private static Call cast(Type targetType, Type sourceType)
+    {
+        return new Call(targetType, StandardFunctions.CAST_FUNCTION_NAME, List.of(new Constant(constantValue(sourceType), sourceType)));
+    }
+
+    private static Call fromIso8601Timestamp()
+    {
+        return new Call(TIMESTAMP_TZ_MILLIS, new FunctionName("from_iso8601_timestamp"), List.of(new Constant(utf8Slice("2024-01-15T00:00:00"), VARCHAR)));
+    }
+
+    private static Object constantValue(Type type)
+    {
+        if (type == VARCHAR) {
+            return utf8Slice("2024-01-15T00:00:00");
+        }
+        return 0L;
+    }
+
+    private static ConnectorSession utcSession()
+    {
+        return TestingConnectorSession.builder()
+                .setTimeZoneKey(getTimeZoneKey("UTC"))
+                .build();
+    }
+
+    private static TrinoRemoteCapabilities capabilitiesWithRemoteTimeZone(String timeZone, String... functions)
+    {
+        return new TrinoRemoteCapabilities(Optional.of("477"), Optional.of(Set.of(functions)), Optional.of(timeZone));
     }
 }

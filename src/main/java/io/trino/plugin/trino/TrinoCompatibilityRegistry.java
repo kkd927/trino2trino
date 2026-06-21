@@ -25,9 +25,11 @@ import io.trino.spi.type.DateType;
 import io.trino.spi.type.MapType;
 import io.trino.spi.type.RowType;
 import io.trino.spi.type.TimeType;
+import io.trino.spi.type.TimeWithTimeZoneType;
 import io.trino.spi.type.TimestampType;
 import io.trino.spi.type.TimestampWithTimeZoneType;
 import io.trino.spi.type.Type;
+import io.trino.spi.type.VarcharType;
 
 import java.util.Locale;
 import java.util.Map;
@@ -178,7 +180,7 @@ final class TrinoCompatibilityRegistry
         if (SESSION_SENSITIVE_DENYLIST.contains(name)) {
             return false;
         }
-        if (name.equals("from_unixtime") && call.getArguments().size() == 1 && !capabilities.hasSameTimeZone(session)) {
+        if (usesSessionTimeZone(name, call) && !capabilities.hasSameTimeZone(session)) {
             return false;
         }
         if (isSubscriptFunction(name)) {
@@ -209,7 +211,7 @@ final class TrinoCompatibilityRegistry
             return true;
         }
         if (remoteVersion.isEmpty()) {
-            return true;
+            return false;
         }
         Matcher matcher = LEADING_VERSION_NUMBER.matcher(remoteVersion.orElseThrow());
         if (!matcher.find()) {
@@ -255,8 +257,26 @@ final class TrinoCompatibilityRegistry
         if (source instanceof Call sourceCall && hasExplicitTimeZone(sourceCall)) {
             return false;
         }
-        return sourceType instanceof TimestampWithTimeZoneType &&
-                (targetType instanceof DateType || targetType instanceof TimeType || targetType instanceof TimestampType);
+        return removesSessionTimeZone(sourceType, targetType) || addsSessionTimeZone(sourceType, targetType);
+    }
+
+    private static boolean removesSessionTimeZone(Type sourceType, Type targetType)
+    {
+        return (sourceType instanceof TimestampWithTimeZoneType &&
+                (targetType instanceof DateType || targetType instanceof TimeType || targetType instanceof TimestampType)) ||
+                (sourceType instanceof TimeWithTimeZoneType && targetType instanceof TimeType);
+    }
+
+    private static boolean addsSessionTimeZone(Type sourceType, Type targetType)
+    {
+        return ((sourceType instanceof DateType || sourceType instanceof TimestampType || sourceType instanceof VarcharType) && targetType instanceof TimestampWithTimeZoneType) ||
+                ((sourceType instanceof TimeType || sourceType instanceof VarcharType) && targetType instanceof TimeWithTimeZoneType);
+    }
+
+    private static boolean usesSessionTimeZone(String name, Call call)
+    {
+        return (name.equals("from_unixtime") && call.getArguments().size() == 1) ||
+                name.equals("from_iso8601_timestamp");
     }
 
     private static boolean hasExplicitTimeZone(Call call)

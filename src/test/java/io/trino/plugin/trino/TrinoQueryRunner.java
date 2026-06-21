@@ -219,6 +219,7 @@ public final class TrinoQueryRunner
                 .build();
 
         remoteRunner.execute(memorySession, "CREATE SCHEMA alt");
+        remoteRunner.execute(memorySession, "CREATE SCHEMA empty_schema");
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE alt.access_log AS SELECT * FROM (VALUES BIGINT '1', BIGINT '2') AS t(id)");
@@ -381,6 +382,9 @@ public final class TrinoQueryRunner
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_char AS SELECT CAST('abc' AS CHAR(10)) AS x");
+        remoteRunner.execute(
+                memorySession,
+                "CREATE TABLE test_array_char AS SELECT ARRAY[CAST('abc' AS CHAR(10))] AS x");
 
         // --- VARBINARY type ---
         remoteRunner.execute(

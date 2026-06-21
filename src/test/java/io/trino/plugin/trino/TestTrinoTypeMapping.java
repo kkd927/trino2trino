@@ -51,14 +51,8 @@ class TestTrinoTypeMapping
     @Test
     void testTimestamp6Precision()
     {
-        // Iceberg default: TIMESTAMP(6)
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_timestamp6");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        String value = result.getMaterializedRows().get(0).getField(0).toString();
-        // Verify microsecond precision is preserved (source: 2024-01-15 10:30:45.123456)
-        assertThat(value).contains("2024-01-15");
-        assertThat(value).contains("10:30:45");
-        assertThat(value).contains(".123456");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_timestamp6").getOnlyValue())
+                .isEqualTo("2024-01-15 10:30:45.123456");
     }
 
     @Test
@@ -95,8 +89,7 @@ class TestTrinoTypeMapping
         MaterializedResult result = computeActual(
                 "SELECT element_at(x, 'price') FROM remote.default.test_map_decimal");
         assertThat(result.getRowCount()).isEqualTo(1);
-        // The value should be 99.99
-        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).contains("99.99");
+        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).isEqualTo("99.99");
     }
 
     // =========================================================================
@@ -124,8 +117,7 @@ class TestTrinoTypeMapping
     {
         MaterializedResult result = computeActual("DESCRIBE remote.default.test_timestamp6");
         String typeStr = result.getMaterializedRows().get(0).getField(1).toString();
-        // Should reflect the precision
-        assertThat(typeStr).contains("timestamp");
+        assertThat(typeStr).isEqualTo("timestamp(6)");
     }
 
     @Test
@@ -297,10 +289,8 @@ class TestTrinoTypeMapping
     @Test
     void testDecimalRoundTrip()
     {
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_decimal ORDER BY x");
-        assertThat(result.getRowCount()).isEqualTo(2);
-        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).contains("123.45");
-        assertThat(result.getMaterializedRows().get(1).getField(0).toString()).contains("999.99");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_decimal ORDER BY x").getOnlyColumnAsSet())
+                .containsExactlyInAnyOrder("123.45", "999.99");
     }
 
     @Test
@@ -385,10 +375,22 @@ class TestTrinoTypeMapping
     @Test
     void testCharType()
     {
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_char");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        // CHAR is space-padded
-        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).startsWith("abc");
+        MaterializedResult result = computeActual("SELECT CAST(x AS VARCHAR), length(x) FROM remote.default.test_char");
+        assertThat(result.getMaterializedRows().get(0).getField(0)).isEqualTo("abc       ");
+        assertThat(result.getMaterializedRows().get(0).getField(1)).isEqualTo(10L);
+    }
+
+    @Test
+    void testArrayCharType()
+    {
+        MaterializedResult result = computeActual(
+                """
+                SELECT CAST(e AS VARCHAR), length(e)
+                FROM remote.default.test_array_char
+                CROSS JOIN UNNEST(x) AS t(e)
+                """);
+        assertThat(result.getMaterializedRows().get(0).getField(0)).isEqualTo("abc       ");
+        assertThat(result.getMaterializedRows().get(0).getField(1)).isEqualTo(10L);
     }
 
     @Test
@@ -401,81 +403,57 @@ class TestTrinoTypeMapping
     @Test
     void testTimestampWithTimeZoneTopLevel()
     {
-        // Source: TIMESTAMP '2024-01-15 10:30:45.123 UTC'
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_tstz");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        String value = result.getMaterializedRows().get(0).getField(0).toString();
-        assertThat(value).contains("2024-01-15");
-        assertThat(value).contains("10:30:45");
-        assertThat(value).contains(".123");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_tstz").getOnlyValue())
+                .isEqualTo("2024-01-15 10:30:45.123 UTC");
     }
 
     @Test
     void testLongDecimal()
     {
-        // DECIMAL(38, 5) — uses Decimals.encodeScaledValue (long decimal path)
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_long_decimal");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        assertThat(result.getMaterializedRows().get(0).getField(0).toString())
-                .contains("12345678901234567890.12345");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_long_decimal").getOnlyValue())
+                .isEqualTo("12345678901234567890.12345");
     }
 
     @Test
     void testLongTimestamp()
     {
-        // TIMESTAMP(9) — uses LongTimestamp path (source: 2024-01-15 10:30:45.123456789)
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_timestamp9");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        String value = result.getMaterializedRows().get(0).getField(0).toString();
-        assertThat(value).contains("2024-01-15");
-        assertThat(value).contains("10:30:45");
-        assertThat(value).contains(".123456789");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_timestamp9").getOnlyValue())
+                .isEqualTo("2024-01-15 10:30:45.123456789");
     }
 
     @Test
     void testLongTimestampWithTimeZone()
     {
-        // TIMESTAMP(6) WITH TIME ZONE — uses LongTimestampWithTimeZone path
-        // Source: 2024-01-15 10:30:45.123456 UTC
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_tstz6");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        String value = result.getMaterializedRows().get(0).getField(0).toString();
-        assertThat(value).contains("2024-01-15");
-        assertThat(value).contains("10:30:45");
-        assertThat(value).contains(".123456");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_tstz6").getOnlyValue())
+                .isEqualTo("2024-01-15 10:30:45.123456 UTC");
     }
 
     @Test
     void testTimestampWithTimeZonePrecision0()
     {
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_tstz0");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).contains("2024-01-15");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_tstz0").getOnlyValue())
+                .isEqualTo("2024-01-15 10:30:45 UTC");
     }
 
     @Test
     void testTimestampWithTimeZonePrecision1()
     {
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_tstz1");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).contains("2024-01-15");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_tstz1").getOnlyValue())
+                .isEqualTo("2024-01-15 10:30:45.1 UTC");
     }
 
     @Test
     void testTimestampWithTimeZonePrecision2()
     {
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_tstz2");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).contains("2024-01-15");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_tstz2").getOnlyValue())
+                .isEqualTo("2024-01-15 10:30:45.12 UTC");
     }
 
     @Test
     void testTimestampWithTimeZonePrecision9()
     {
-        // Long TSTZ path (precision > 3)
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_tstz9");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).contains("2024-01-15");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_tstz9").getOnlyValue())
+                .isEqualTo("2024-01-15 10:30:45.123456789 UTC");
     }
 
     @Test

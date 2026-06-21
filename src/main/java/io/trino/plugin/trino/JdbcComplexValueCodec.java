@@ -54,6 +54,7 @@ import java.util.Map;
 import static io.trino.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
+import static io.trino.spi.type.Chars.truncateToLengthAndTrimSpaces;
 import static io.trino.spi.type.DoubleType.DOUBLE;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.RealType.REAL;
@@ -221,7 +222,11 @@ final class JdbcComplexValueCodec
 
     private static void writeScalarJdbcValueToBlock(Object value, Type type, BlockBuilder builder)
     {
-        if (type instanceof VarcharType || type instanceof CharType) {
+        if (type instanceof CharType charType) {
+            type.writeSlice(builder, truncateToLengthAndTrimSpaces(Slices.utf8Slice(value.toString()), charType));
+            return;
+        }
+        if (type instanceof VarcharType) {
             type.writeSlice(builder, Slices.utf8Slice(value.toString()));
             return;
         }

@@ -427,21 +427,67 @@ class TestTrinoConnectorTest
     @Override
     public void testNativeQueryCreateStatement()
     {
-        abort("DDL passthrough is outside the supported row-returning read contract");
+        assertPassthroughStatementRejected("CREATE TABLE memory.default.native_query_create AS SELECT 1 AS value");
     }
 
     @Test
     @Override
     public void testNativeQueryInsertStatementTableDoesNotExist()
     {
-        abort("DML passthrough is outside the supported row-returning read contract");
+        assertPassthroughStatementRejected("INSERT INTO memory.default.native_query_missing VALUES (1)");
     }
 
     @Test
     @Override
     public void testNativeQueryInsertStatementTableExists()
     {
-        abort("DML passthrough is outside the supported row-returning read contract");
+        assertPassthroughStatementRejected("INSERT INTO memory.default.nation VALUES (99, 'TEST', 0, 'test')");
+    }
+
+    @Test
+    void testNativeQueryDeleteStatement()
+    {
+        assertPassthroughStatementRejected("DELETE FROM memory.default.nation WHERE nationkey = 0");
+    }
+
+    @Test
+    void testNativeQueryUpdateStatement()
+    {
+        assertPassthroughStatementRejected("UPDATE memory.default.nation SET name = 'X' WHERE nationkey = 0");
+    }
+
+    @Test
+    void testNativeQueryCallStatement()
+    {
+        assertPassthroughStatementRejected("CALL system.runtime.kill_query('query-id', 'reason')");
+    }
+
+    @Test
+    void testNativeQueryRejectsCrossCatalogTableFunction()
+    {
+        assertThatThrownBy(() -> computeActual(
+                """
+                SELECT *
+                FROM TABLE(system.query(
+                    query => 'SELECT * FROM TABLE(tpch.system.query(query => ''SELECT 1 AS value''))'
+                ))
+                """))
+                .hasMessageContaining("configured remote catalog 'memory'")
+                .hasMessageContaining("tpch.system.query");
+    }
+
+    @Test
+    void testNativeQueryRejectsNestedSystemQuery()
+    {
+        assertThatThrownBy(() -> computeActual(
+                """
+                SELECT *
+                FROM TABLE(system.query(
+                    query => 'SELECT * FROM TABLE(memory.system.query(query => ''SELECT * FROM tpch.tiny.nation''))'
+                ))
+                """))
+                .hasMessageContaining("Nested system.query calls are not supported in passthrough SQL")
+                .hasMessageContaining("memory.system.query");
     }
 
     @Test
@@ -468,6 +514,12 @@ class TestTrinoConnectorTest
         abort("Data mapping smoke test requires write support to create test tables");
     }
 
+    private void assertPassthroughStatementRejected(String sql)
+    {
+        assertThatThrownBy(() -> computeActual("SELECT * FROM TABLE(system.query(query => '" + sql.replace("'", "''") + "'))"))
+                .hasMessageContaining("system.query only supports row-returning read queries");
+    }
+
     // =========================================================================
     // Architectural overrides -- planner-level pushdown verification
     //
@@ -484,6 +536,8 @@ class TestTrinoConnectorTest
         assertThat(query("SELECT max(regionkey) FROM nation")).isFullyPushedDown();
         assertThat(query("SELECT min(regionkey) FROM nation")).isFullyPushedDown();
         assertThat(query("SELECT count(DISTINCT regionkey) FROM nation")).isFullyPushedDown();
+        assertThat(query("SELECT count_if(regionkey = 1) FROM nation")).isFullyPushedDown();
+        assertThat(query("SELECT checksum(regionkey) FROM nation")).isFullyPushedDown();
         assertThat(query("SELECT regionkey, count(*) FROM nation GROUP BY regionkey")).isFullyPushedDown();
     }
 

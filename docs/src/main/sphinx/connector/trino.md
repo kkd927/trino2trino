@@ -177,7 +177,10 @@ FROM TABLE(
 - the inner SQL string is sent to remote Trino as written
 - the connector still infers output columns and applies the normal type
   mapping and transport rules to the result
-- explicit table references must stay within the configured remote catalog
+- explicit table and table function references must stay within the configured
+  remote catalog
+- nested ``system.query`` calls inside passthrough SQL are rejected
+- DDL, DML, and ``CALL`` statements are rejected before remote execution
 - remote failures are returned directly; explicit passthrough SQL is not a
   fallback candidate
 
@@ -212,6 +215,12 @@ The connector provides read-only access.
      - No
    * - :doc:`CREATE SCHEMA </sql/create-schema>`
      - No
+   * - :doc:`DROP SCHEMA </sql/drop-schema>`
+     - No
+   * - :doc:`CREATE VIEW </sql/create-view>`
+     - No
+   * - ``COMMENT ON``
+     - No
 ```
 
 ## Performance
@@ -227,7 +236,8 @@ The connector supports:
   dereference, subscript, and aggregation expressions
 - ``LIMIT`` pushdown
 - ``ORDER BY ... LIMIT`` pushdown
-- aggregation pushdown
+- aggregation pushdown for ``count``, ``count distinct``, ``count_if``,
+  ``checksum``, ``min/max``, ``sum``, and ``avg`` on supported types
 - same-remote join pushdown for supported join shapes
 
 Remote delegation modes:
@@ -276,15 +286,21 @@ Not supported:
 - role delegation
 - extra credential passthrough
 
-Session-sensitive functions such as ``current_timestamp``, ``current_date``,
-``current_time``, and current time zone functions are not delegated. Expressions
-with explicit time zone operands, such as ``AT TIME ZONE 'Asia/Seoul'``, can be
-delegated when the rendered SQL is otherwise compatible.
+Session-sensitive functions and casts such as ``current_timestamp``,
+``current_date``, ``current_time``, current time zone functions,
+``from_iso8601_timestamp``, and casts that add or remove a session time zone
+are not delegated. Expressions with explicit time zone operands, such as
+``AT TIME ZONE 'Asia/Seoul'``, can be delegated when the rendered SQL is
+otherwise compatible.
 
 ## Limitations
 
 - Standard table access and metadata operations are read-only
-- ``system.query`` is documented only for row-returning read queries
+- ``system.query`` supports only row-returning read queries; DDL, DML, and
+  ``CALL`` statements are rejected before remote execution
+- ``system.query`` may reference only the configured remote catalog; explicit
+  cross-catalog table and table function references and nested ``system.query``
+  calls are rejected
 - Negative dates (before year 0001) are not preserved correctly through JDBC
 - Cross-cluster joins can only be improved with pushdown and statistics; the
   connector cannot remove the structural cost of federating between clusters
