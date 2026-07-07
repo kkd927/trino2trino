@@ -17,6 +17,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Check out source
@@ -51,6 +52,9 @@ jobs:
       - name: Build and test
         run: mvn -B clean verify
 
+      - name: Run Delta smoke test
+        run: testing/delta-smoke/run.sh
+
       - name: Upload test reports
         if: failure()
         uses: actions/upload-artifact@v6
@@ -59,4 +63,5 @@ jobs:
           path: |
             target/surefire-reports/**
             target/failsafe-reports/**
+            target/delta-smoke/**
           if-no-files-found: ignore

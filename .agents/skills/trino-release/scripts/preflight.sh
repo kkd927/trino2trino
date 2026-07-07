@@ -117,7 +117,6 @@ fi
 workflow_files=(
   ".github/workflows/build.yml"
   ".github/workflows/release.yml"
-  ".github/workflows/delta-smoke.yml"
 )
 
 current_jdks=()
@@ -128,8 +127,8 @@ for file in "${workflow_files[@]}"; do
   current_jdks+=("$value")
 done
 
-if [[ "${current_jdks[0]}" != "${current_jdks[1]}" || "${current_jdks[0]}" != "${current_jdks[2]}" ]]; then
-  fail "workflow java-version drift detected: ${workflow_files[0]}=${current_jdks[0]}, ${workflow_files[1]}=${current_jdks[1]}, ${workflow_files[2]}=${current_jdks[2]}"
+if [[ "${current_jdks[0]}" != "${current_jdks[1]}" ]]; then
+  fail "workflow java-version drift detected: ${workflow_files[0]}=${current_jdks[0]}, ${workflow_files[1]}=${current_jdks[1]}"
 fi
 current_jdk="${current_jdks[0]}"
 

@@ -708,10 +708,12 @@ public class TestTrinoConnectorIntegration
 
         // Queries keep working through the baseline rewriter path, with
         // delegation-only expressions evaluated locally
-        MaterializedResult result = computeActual(delegationOff,
+        MaterializedResult result = computeActual(
+                delegationOff,
                 "SELECT regexp_extract(path, '/post/([0-9]+)', 1) FROM remote.default.test_delegation_log WHERE regexp_like(path, '^/post/') ORDER BY 1");
         assertThat(result.getOnlyColumnAsSet()).containsExactly("100", "200");
-        String explain = computeActual(delegationOff,
+        String explain = computeActual(
+                delegationOff,
                 "EXPLAIN SELECT path FROM remote.default.test_delegation_log WHERE regexp_like(path, '^/post/')")
                 .getOnlyValue().toString();
         assertThat(explain).contains("ScanFilter");

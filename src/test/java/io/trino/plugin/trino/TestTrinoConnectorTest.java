@@ -523,5 +523,4 @@ class TestTrinoConnectorTest
             computeRemoteActual("DROP TABLE IF EXISTS " + schemaTableName);
         }
     }
-
 }

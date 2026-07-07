@@ -165,19 +165,22 @@ FROM TABLE(
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for build, test, and development instructions.
 
-### Optional Delta Lake smoke test
+### Delta Lake smoke test
 
-The default test suite uses in-process Trino 481 instances with `memory` and
-`tpch` catalogs. For the common deployment pattern where a smaller federated
-Trino cluster queries a separate Delta Lake-focused Trino cluster, run the
-optional Docker smoke test:
+The default `Build and Test` CI workflow runs a Docker-based Delta Lake smoke
+test after `mvn -B clean verify`. It covers the common deployment pattern where
+a smaller federated Trino cluster queries a separate Delta Lake-focused Trino
+cluster.
+
+To run the same smoke test locally:
 
 ```bash
-mvn -B -Dair.check.skip-all=true -DskipTests package
+mvn -B clean verify
 testing/delta-smoke/run.sh
 ```
 
-See [docs/delta-smoke.md](docs/delta-smoke.md) for the topology and assertions.
+Failure diagnostics are written to `target/delta-smoke/`. See
+[docs/delta-smoke.md](docs/delta-smoke.md) for the topology and assertions.
 
 ## License
 

@@ -49,18 +49,21 @@ docker exec -it trino-local trino
 SELECT * FROM trino.tpch.tiny.nation LIMIT 5;
 ```
 
-## Optional Delta Lake Smoke Test
+## Delta Lake Smoke Test
 
-The default CI does not start Delta Lake infrastructure. To validate the
-packaged plugin against a separate Trino 481 cluster backed by a Delta Lake
-catalog, run:
+The default `Build and Test` CI workflow validates the packaged plugin against
+a separate Trino 481 cluster backed by a Delta Lake catalog. It reuses the
+`target/trino-trino-481` package produced by `mvn -B clean verify`.
+
+To run the same smoke test locally:
 
 ```bash
-mvn -B -Dair.check.skip-all=true -DskipTests package
+mvn -B clean verify
 testing/delta-smoke/run.sh
 ```
 
-This starts local and remote Trino containers, MinIO, and Hive Metastore. See
+This starts local and remote Trino containers, MinIO, and Hive Metastore.
+Failure diagnostics are written to `target/delta-smoke/`. See
 `docs/delta-smoke.md` for details.
 
 ## Documentation

@@ -310,7 +310,8 @@ The test suite is centered on the generic contract exposed by remote Trino:
 - statistics
 - federation behavior
 
-An optional Docker-based Delta Lake smoke test is available for the production
-shape where a small federated Trino 481 cluster queries a separate Trino 481
-cluster with a Delta Lake catalog. It is intentionally outside the default
-``mvn verify`` path and is documented in ``docs/delta-smoke.md``.
+The default ``Build and Test`` CI workflow also runs a Docker-based Delta Lake
+smoke test for the production shape where a small federated Trino 481 cluster
+queries a separate Trino 481 cluster with a Delta Lake catalog. It reuses the
+``target/trino-trino-481`` package produced by ``mvn -B clean verify`` and is
+documented in ``docs/delta-smoke.md``.

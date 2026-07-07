@@ -45,7 +45,6 @@ versioned_files=(
 workflow_files=(
   ".github/workflows/build.yml"
   ".github/workflows/release.yml"
-  ".github/workflows/delta-smoke.yml"
 )
 
 for file in "${versioned_files[@]}" "${workflow_files[@]}"; do
@@ -79,7 +78,7 @@ for file in "${workflow_files[@]}"; do
   current_jdks+=("$value")
 done
 
-if [[ "${current_jdks[0]}" != "${current_jdks[1]}" || "${current_jdks[0]}" != "${current_jdks[2]}" ]]; then
+if [[ "${current_jdks[0]}" != "${current_jdks[1]}" ]]; then
   fail "workflow java-version drift detected before JDK update"
 fi
 
