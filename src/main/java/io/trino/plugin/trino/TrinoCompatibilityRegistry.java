@@ -32,11 +32,7 @@ import io.trino.spi.type.Type;
 import io.trino.spi.type.VarcharType;
 
 import java.util.Locale;
-import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import static java.util.Objects.requireNonNull;
 
@@ -76,7 +72,6 @@ final class TrinoCompatibilityRegistry
             "cardinality",
             "ceil",
             "ceiling",
-            "coalesce",
             "concat",
             "contains",
             "date",
@@ -97,7 +92,6 @@ final class TrinoCompatibilityRegistry
             "from_unixtime",
             "greatest",
             "hour",
-            "if",
             "json_array_contains",
             "json_extract",
             "json_extract_scalar",
@@ -127,7 +121,6 @@ final class TrinoCompatibilityRegistry
             "to_iso8601",
             "to_unixtime",
             "trim",
-            "try",
             "upper",
             "week",
             "with_timezone",
@@ -150,9 +143,6 @@ final class TrinoCompatibilityRegistry
             "max",
             "min",
             "sum");
-
-    private static final Pattern LEADING_VERSION_NUMBER = Pattern.compile("^(\\d+)");
-    private static final Map<String, Integer> MINIMUM_FUNCTION_VERSION = Map.of();
 
     boolean isFunctionSupported(ConnectorSession session, Call call, TrinoRemoteCapabilities capabilities)
     {
@@ -186,9 +176,7 @@ final class TrinoCompatibilityRegistry
         if (isSubscriptFunction(name)) {
             return true;
         }
-        return FUNCTION_ALLOWLIST.contains(name) &&
-                isVersionAtLeast(capabilities.version(), MINIMUM_FUNCTION_VERSION.getOrDefault(name, 0)) &&
-                capabilities.hasFunction(name);
+        return FUNCTION_ALLOWLIST.contains(name) && capabilities.hasFunction(name);
     }
 
     boolean isAggregationSupported(AggregateFunction aggregate, TrinoRemoteCapabilities capabilities)
@@ -199,25 +187,7 @@ final class TrinoCompatibilityRegistry
             return false;
         }
         String name = aggregate.getFunctionName().toLowerCase(Locale.ENGLISH);
-        return AGGREGATION_ALLOWLIST.contains(name) &&
-                isVersionAtLeast(capabilities.version(), MINIMUM_FUNCTION_VERSION.getOrDefault(name, 0)) &&
-                capabilities.hasFunction(name);
-    }
-
-    boolean isVersionAtLeast(Optional<String> remoteVersion, int minimumMajorVersion)
-    {
-        requireNonNull(remoteVersion, "remoteVersion is null");
-        if (minimumMajorVersion <= 0) {
-            return true;
-        }
-        if (remoteVersion.isEmpty()) {
-            return false;
-        }
-        Matcher matcher = LEADING_VERSION_NUMBER.matcher(remoteVersion.orElseThrow());
-        if (!matcher.find()) {
-            return false;
-        }
-        return Integer.parseInt(matcher.group(1)) >= minimumMajorVersion;
+        return AGGREGATION_ALLOWLIST.contains(name) && capabilities.hasFunction(name);
     }
 
     private boolean isTypeSupported(Type type)

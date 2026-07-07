@@ -36,12 +36,6 @@ final class TrinoConnectionUrl
         }
     }
 
-    static String extractRemoteCatalog(String connectionUrl)
-    {
-        validate(connectionUrl);
-        return parsePathSegments(connectionUrl).getFirst();
-    }
-
     private static List<String> parsePathSegments(String connectionUrl)
     {
         if (connectionUrl == null || !connectionUrl.startsWith(JDBC_PREFIX)) {

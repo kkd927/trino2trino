@@ -62,8 +62,7 @@ SELECT * FROM remote.schema.table LIMIT 10;
 | `connection-user` | Username for remote Trino | OS user |
 | `connection-password` | Password for remote Trino | - |
 | `unsupported-type-handling` | Final fallback for truly unsupported types: `IGNORE` or `CONVERT_TO_VARCHAR` | `CONVERT_TO_VARCHAR` |
-| `trino.remote-delegation.enabled` | Enable Trino-native SQL rendering for remote fragments | `true` |
-| `trino.remote-delegation.mode` | Delegation policy: `AUTO`, `OFF`, or `STRICT` | `AUTO` |
+| `remote-delegation.enabled` | Enable Trino-native SQL rendering for remote fragments | `true` |
 
 ## Supported / Not Supported
 
@@ -106,11 +105,10 @@ See the [connector reference](docs/src/main/sphinx/connector/trino.md) for detai
 - Same-remote join pushdown for supported join shapes
 - Table statistics via `SHOW STATS FOR <table>` on the remote side
 
-`AUTO` mode delegates compatible remote subtrees and safely falls back to local
-evaluation for unsupported expressions. `STRICT` mode fails a remote subtree when
-it cannot be rendered for remote Trino. `OFF` leaves only the baseline JDBC
-pushdown path enabled. Catalog session properties are
-`remote_delegation_enabled` and `remote_delegation_mode`.
+Remote delegation delegates compatible remote subtrees and safely falls back to
+local evaluation for unsupported expressions. Disabling it
+(`remote-delegation.enabled=false`) leaves only the baseline JDBC pushdown path
+enabled. The equivalent catalog session property is `remote_delegation_enabled`.
 
 See the [connector reference](docs/src/main/sphinx/connector/trino.md) for pushdown behavior on transport-backed columns.
 
@@ -129,17 +127,20 @@ FROM TABLE(
 
 - The inner SQL string is sent to remote Trino as written
 - Output columns still go through normal transport rules
-- Table and table function references must stay within the configured remote catalog
-- Nested `system.query` calls inside passthrough SQL are rejected
+- Only top-level row-returning queries (`SELECT`, `WITH`, `VALUES`, `TABLE`)
+  are accepted; Trino performs no further validation or security checks on
+  passthrough SQL, and the execution boundary is remote access control
 - Unlike normal table access, `system.query` is explicit user SQL; remote
   failures are returned directly and are not treated as fallback candidates.
 
 ## Scope Model
 
-- Normal table access maps one local catalog to one configured remote catalog
+- Normal table access maps one local catalog to one configured remote catalog;
+  this 1:1 mapping is the contract of the default path
 - All schemas under that remote catalog are exposed through normal metadata and table access
 - Multiple remote catalogs require multiple local catalog property files
-- `system.query` may reference only the configured remote catalog; explicit cross-catalog table and table function references and nested `system.query` calls are rejected
+- `system.query` is an explicit escape hatch from that mapping: passthrough SQL
+  may reference whatever the remote credentials can access
 
 ## Limitations
 

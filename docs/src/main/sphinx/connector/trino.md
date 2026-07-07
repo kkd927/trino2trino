@@ -49,12 +49,9 @@ connection-url=jdbc:trino://remote-host:443/catalog_name?SSL=true
    * - ``unsupported-type-handling``
      - Final fallback for truly unsupported types: ``IGNORE`` or ``CONVERT_TO_VARCHAR``
      - ``CONVERT_TO_VARCHAR``
-   * - ``trino.remote-delegation.enabled``
+   * - ``remote-delegation.enabled``
      - Enable Trino-native SQL rendering for compatible remote fragments
      - ``true``
-   * - ``trino.remote-delegation.mode``
-     - Delegation policy: ``AUTO``, ``OFF``, or ``STRICT``
-     - ``AUTO``
 ```
 
 ## Querying
@@ -177,10 +174,12 @@ FROM TABLE(
 - the inner SQL string is sent to remote Trino as written
 - the connector still infers output columns and applies the normal type
   mapping and transport rules to the result
-- explicit table and table function references must stay within the configured
-  remote catalog
-- nested ``system.query`` calls inside passthrough SQL are rejected
-- DDL, DML, and ``CALL`` statements are rejected before remote execution
+- only top-level row-returning queries (``SELECT``, ``WITH``, ``VALUES``,
+  ``TABLE``) are accepted; Trino performs no further validation or security
+  checks on passthrough SQL, and the execution boundary is remote access
+  control
+- while normal table access maps 1:1 to the configured remote catalog,
+  passthrough SQL is an explicit escape hatch from that mapping
 - remote failures are returned directly; explicit passthrough SQL is not a
   fallback candidate
 
@@ -240,16 +239,11 @@ The connector supports:
   ``checksum``, ``min/max``, ``sum``, and ``avg`` on supported types
 - same-remote join pushdown for supported join shapes
 
-Remote delegation modes:
-
-- ``AUTO`` delegates compatible remote subtrees and leaves unsupported
-  expressions as local fallback when that preserves semantics
-- ``STRICT`` fails a remote subtree when it cannot be rendered for remote Trino
-- ``OFF`` disables the Trino-native renderer and leaves only the baseline JDBC
-  pushdown path enabled
-
-The equivalent catalog session properties are
-``remote_delegation_enabled`` and ``remote_delegation_mode``.
+Remote delegation delegates compatible remote subtrees and leaves unsupported
+expressions as local fallback when that preserves semantics. Disabling it
+(``remote-delegation.enabled=false``) leaves only the baseline JDBC pushdown
+path enabled. The equivalent catalog session property is
+``remote_delegation_enabled``.
 
 Pushdown behavior for transport-backed columns is split:
 
@@ -293,11 +287,9 @@ otherwise compatible.
 ## Limitations
 
 - Standard table access and metadata operations are read-only
-- ``system.query`` supports only row-returning read queries; DDL, DML, and
-  ``CALL`` statements are rejected before remote execution
-- ``system.query`` may reference only the configured remote catalog; explicit
-  cross-catalog table and table function references and nested ``system.query``
-  calls are rejected
+- ``system.query`` supports only row-returning read queries; statement-level
+  writes (DDL, DML, ``CALL``) are rejected before remote execution, and no
+  further validation is performed on passthrough SQL
 - Negative dates (before year 0001) are not preserved correctly through JDBC
 - Cross-cluster joins can only be improved with pushdown and statistics; the
   connector cannot remove the structural cost of federating between clusters

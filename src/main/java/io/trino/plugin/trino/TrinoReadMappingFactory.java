@@ -333,10 +333,12 @@ final class TrinoReadMappingFactory
         if (!TrinoTypeClassifier.supportsComplexReadType(arrayType.getElementType())) {
             return fallbackToVarchar(session, typeHandle);
         }
+        // DISABLE_PUSHDOWN makes the write function unreachable (tuple domain binding
+        // is the only path into a column mapping write function)
         return Optional.of(ColumnMapping.objectMapping(
                 arrayType,
                 ObjectReadFunction.of(Block.class, (rs, idx) -> JdbcComplexValueCodec.readArray(rs, idx, arrayType.getElementType())),
-                ObjectWriteFunction.of(Block.class, (stmt, idx, block) -> stmt.setObject(idx, JdbcComplexValueCodec.toJdbcValue(block, arrayType))),
+                rejectingWriteFunction(Block.class),
                 DISABLE_PUSHDOWN));
     }
 
@@ -367,7 +369,7 @@ final class TrinoReadMappingFactory
         return Optional.of(ColumnMapping.objectMapping(
                 mapType,
                 ObjectReadFunction.of(SqlMap.class, (rs, idx) -> JdbcComplexValueCodec.readMap(rs, idx, mapType)),
-                ObjectWriteFunction.of(SqlMap.class, (stmt, idx, sqlMap) -> stmt.setObject(idx, JdbcComplexValueCodec.toJdbcValue(sqlMap, mapType))),
+                rejectingWriteFunction(SqlMap.class),
                 DISABLE_PUSHDOWN));
     }
 
@@ -383,7 +385,7 @@ final class TrinoReadMappingFactory
         return Optional.of(ColumnMapping.objectMapping(
                 rowType,
                 ObjectReadFunction.of(SqlRow.class, (rs, idx) -> JdbcComplexValueCodec.readRow(rs, idx, rowType)),
-                ObjectWriteFunction.of(SqlRow.class, (stmt, idx, sqlRow) -> stmt.setObject(idx, JdbcComplexValueCodec.toJdbcValue(sqlRow, rowType))),
+                rejectingWriteFunction(SqlRow.class),
                 DISABLE_PUSHDOWN));
     }
 

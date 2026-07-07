@@ -463,34 +463,6 @@ class TestTrinoConnectorTest
     }
 
     @Test
-    void testNativeQueryRejectsCrossCatalogTableFunction()
-    {
-        assertThatThrownBy(() -> computeActual(
-                """
-                SELECT *
-                FROM TABLE(system.query(
-                    query => 'SELECT * FROM TABLE(tpch.system.query(query => ''SELECT 1 AS value''))'
-                ))
-                """))
-                .hasMessageContaining("configured remote catalog 'memory'")
-                .hasMessageContaining("tpch.system.query");
-    }
-
-    @Test
-    void testNativeQueryRejectsNestedSystemQuery()
-    {
-        assertThatThrownBy(() -> computeActual(
-                """
-                SELECT *
-                FROM TABLE(system.query(
-                    query => 'SELECT * FROM TABLE(memory.system.query(query => ''SELECT * FROM tpch.tiny.nation''))'
-                ))
-                """))
-                .hasMessageContaining("Nested system.query calls are not supported in passthrough SQL")
-                .hasMessageContaining("memory.system.query");
-    }
-
-    @Test
     @Override
     public void testNativeQueryIncorrectSyntax()
     {

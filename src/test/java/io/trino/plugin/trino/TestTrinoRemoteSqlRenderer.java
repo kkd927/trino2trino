@@ -51,9 +51,7 @@ class TestTrinoRemoteSqlRenderer
 {
     private static final ConnectorSession SESSION = TestingConnectorSession.builder()
             .setPropertyMetadata(new TrinoRemoteDelegationSessionProperties(new TrinoRemoteDelegationConfig()).getSessionProperties())
-            .setPropertyValues(Map.of(
-                    TrinoRemoteDelegationSessionProperties.REMOTE_DELEGATION_ENABLED, true,
-                    TrinoRemoteDelegationSessionProperties.REMOTE_DELEGATION_MODE, TrinoRemoteDelegationMode.AUTO.name()))
+            .setPropertyValues(Map.of(TrinoRemoteDelegationSessionProperties.REMOTE_DELEGATION_ENABLED, true))
             .build();
 
     private static final JdbcTypeHandle BIGINT_TYPE_HANDLE = new JdbcTypeHandle(

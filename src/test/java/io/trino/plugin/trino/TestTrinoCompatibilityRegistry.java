@@ -87,15 +87,6 @@ class TestTrinoCompatibilityRegistry
     }
 
     @Test
-    void testVersionGate()
-    {
-        assertThat(registry.isVersionAtLeast(Optional.of("477"), 477)).isTrue();
-        assertThat(registry.isVersionAtLeast(Optional.of("476-SNAPSHOT"), 477)).isFalse();
-        assertThat(registry.isVersionAtLeast(Optional.empty(), 477)).isFalse();
-        assertThat(registry.isVersionAtLeast(Optional.empty(), 0)).isTrue();
-    }
-
-    @Test
     void testCastAddingSessionTimeZoneDeniedWhenRemoteTimeZoneDiffers()
     {
         assertThat(registry.isFunctionSupported(

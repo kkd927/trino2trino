@@ -431,16 +431,18 @@ public class TestTrinoConnectorIntegration
     }
 
     @Test
-    void testQueryPassthroughRejectsOtherRemoteCatalog()
+    void testQueryPassthroughCanReferenceOtherRemoteCatalog()
     {
-        assertThatThrownBy(() -> computeActual(
+        // Passthrough SQL is an explicit escape hatch from the 1:1 catalog mapping:
+        // it may reference any remote catalog the remote credentials can access
+        MaterializedResult result = computeActual(
                 """
                 SELECT *
                 FROM TABLE(remote.system.query(
                     query => 'SELECT name FROM tpch.tiny.nation WHERE nationkey = 0'
                 ))
-                """))
-                .hasMessageContaining("configured remote catalog 'memory'");
+                """);
+        assertThat(result.getOnlyValue()).isEqualTo("ALGERIA");
     }
 
     @Test
