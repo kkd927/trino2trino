@@ -700,6 +700,34 @@ public class TestTrinoConnectorIntegration
     }
 
     @Test
+    void testRemoteDelegationDisabled()
+    {
+        Session delegationOff = Session.builder(getSession())
+                .setCatalogSessionProperty("remote", "remote_delegation_enabled", "false")
+                .build();
+
+        // Queries keep working through the baseline rewriter path, with
+        // delegation-only expressions evaluated locally
+        MaterializedResult result = computeActual(delegationOff,
+                "SELECT regexp_extract(path, '/post/([0-9]+)', 1) FROM remote.default.test_delegation_log WHERE regexp_like(path, '^/post/') ORDER BY 1");
+        assertThat(result.getOnlyColumnAsSet()).containsExactly("100", "200");
+        String explain = computeActual(delegationOff,
+                "EXPLAIN SELECT path FROM remote.default.test_delegation_log WHERE regexp_like(path, '^/post/')")
+                .getOnlyValue().toString();
+        assertThat(explain).contains("ScanFilter");
+        assertThat(explain).contains("regexp_like");
+
+        // Baseline pushdown stays available: tuple-domain predicates, the standard
+        // comparison/arithmetic rewriter, and the aggregate rewriter
+        assertThat(query(delegationOff, "SELECT name FROM remote.default.nation WHERE nationkey = 1"))
+                .isFullyPushedDown();
+        assertThat(query(delegationOff, "SELECT name FROM remote.default.nation WHERE nationkey + 1 = 2"))
+                .isFullyPushedDown();
+        assertThat(query(delegationOff, "SELECT count(*) FROM remote.default.nation"))
+                .isFullyPushedDown();
+    }
+
+    @Test
     void testComplexConstantPredicateFallsBackLocally()
     {
         // Regression: a complex-typed constant in a delegated predicate was emitted as

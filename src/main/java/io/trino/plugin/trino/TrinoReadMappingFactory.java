@@ -395,6 +395,10 @@ final class TrinoReadMappingFactory
             case "uuid" -> Optional.of(ColumnMapping.sliceMapping(
                     UuidType.UUID,
                     (rs, idx) -> TrinoSpecialTypeCodec.uuidSlice(rs.getString(idx)),
+                    // Pushdown stays disabled because the Trino JDBC driver's untyped
+                    // setObject rejects java.util.UUID, so this write function fails at
+                    // bind time; enabling pushdown needs a typed bind expression
+                    // (CAST(? AS uuid) over a string parameter) first
                     (stmt, idx, value) -> stmt.setObject(idx, UuidType.trinoUuidToJavaUuid(value)),
                     DISABLE_PUSHDOWN));
             case "json" -> {

@@ -104,7 +104,8 @@ assert_query_equals "2	gold	7	12345678901234567890.1234" "SELECT cardinality(tag
 assert_query_equals "3" "SELECT count(*) FROM (VALUES BIGINT '1', BIGINT '3') AS local_keys(custkey) JOIN remote_delta.smoke.orders o ON o.custkey = local_keys.custkey"
 assert_query_equals "3" "SELECT count(*) FROM remote_delta.smoke.orders o JOIN remote_delta.smoke.customers c ON o.custkey = c.custkey WHERE c.region IN ('AMERICA', 'ASIA')"
 assert_query_equals "2" "SELECT count(*) FROM TABLE(remote_delta.system.query(query => 'SELECT orderkey FROM delta.smoke.orders WHERE ds = ''2026-01-01'''))"
-assert_query_contains "RemoteTrinoQuery[catalog=delta, delegated=true]" "EXPLAIN SELECT regexp_extract(status, '^(O|C)', 1) FROM remote_delta.smoke.orders WHERE regexp_like(status, '^(OPEN|CLOSED)$') AND ds = '2026-01-01'"
-assert_query_contains "RemoteTrinoQuery[catalog=delta" "EXPLAIN SELECT o.orderkey, c.name FROM remote_delta.smoke.orders o JOIN remote_delta.smoke.customers c ON o.custkey = c.custkey"
+# Delegated subtrees collapse into a query relation scan
+assert_query_contains "remote_delta:Query[" "EXPLAIN SELECT regexp_extract(status, '^(O|C)', 1) FROM remote_delta.smoke.orders WHERE regexp_like(status, '^(OPEN|CLOSED)$') AND ds = '2026-01-01'"
+assert_query_contains "remote_delta:Query[" "EXPLAIN SELECT o.orderkey, c.name FROM remote_delta.smoke.orders o JOIN remote_delta.smoke.customers c ON o.custkey = c.custkey"
 
 echo "Delta smoke test passed"

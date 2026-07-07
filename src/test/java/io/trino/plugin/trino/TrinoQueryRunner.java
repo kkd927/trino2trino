@@ -35,6 +35,40 @@ import static io.trino.testing.TestingSession.testSessionBuilder;
  */
 public final class TrinoQueryRunner
 {
+    /**
+     * Representative type coverage replacing the base testDataMappingSmokeTest,
+     * which requires CREATE TABLE through the connector and is skipped for
+     * read-only connectors. Fixtures are created remotely with a sample value,
+     * a high value, and a NULL per type.
+     */
+    record DataMappingCase(String suffix, String type, String sampleLiteral, String highLiteral) {}
+
+    static final List<DataMappingCase> DATA_MAPPING_CASES = List.of(
+            new DataMappingCase("boolean", "boolean", "false", "true"),
+            new DataMappingCase("tinyint", "tinyint", "TINYINT '37'", "TINYINT '127'"),
+            new DataMappingCase("smallint", "smallint", "SMALLINT '32123'", "SMALLINT '32767'"),
+            new DataMappingCase("integer", "integer", "1274942432", "2147483647"),
+            new DataMappingCase("bigint", "bigint", "BIGINT '312739231274942432'", "BIGINT '9223372036854775807'"),
+            new DataMappingCase("real", "real", "REAL '567.123'", "REAL '999999.999'"),
+            new DataMappingCase("double", "double", "DOUBLE '1234567890123.123'", "DOUBLE '9999999999999.999'"),
+            new DataMappingCase("decimal_short", "decimal(3,1)", "12.3", "99.9"),
+            new DataMappingCase("decimal_long", "decimal(30,5)", "DECIMAL '3141592653589793238462643.38327'", "DECIMAL '9999999999999999999999999.99999'"),
+            new DataMappingCase("varchar", "varchar", "'test'", "'shall I compare thee to a summer''s day'"),
+            new DataMappingCase("char", "char(3)", "'ab'", "'zzz'"),
+            new DataMappingCase("varbinary", "varbinary", "X'12ab3f'", "X'ffffffffffffffffffff'"),
+            new DataMappingCase("date", "date", "DATE '2020-02-12'", "DATE '9999-12-31'"),
+            new DataMappingCase("time_3", "time(3)", "TIME '15:03:00.123'", "TIME '23:59:59.999'"),
+            new DataMappingCase("time_6", "time(6)", "TIME '15:03:00.123456'", "TIME '23:59:59.999999'"),
+            new DataMappingCase("time_12", "time(12)", "TIME '15:03:00.123456789012'", "TIME '23:59:59.999999999999'"),
+            new DataMappingCase("timestamp_3", "timestamp(3)", "TIMESTAMP '2020-02-12 15:03:00.123'", "TIMESTAMP '2199-12-31 23:59:59.999'"),
+            new DataMappingCase("timestamp_6", "timestamp(6)", "TIMESTAMP '2020-02-12 15:03:00.123456'", "TIMESTAMP '2199-12-31 23:59:59.999999'"),
+            new DataMappingCase("timestamp_9", "timestamp(9)", "TIMESTAMP '2020-02-12 15:03:00.123456789'", "TIMESTAMP '2199-12-31 23:59:59.999999999'"),
+            new DataMappingCase("timestamp_12", "timestamp(12)", "TIMESTAMP '2020-02-12 15:03:00.123456789012'", "TIMESTAMP '2199-12-31 23:59:59.999999999999'"),
+            new DataMappingCase("timestamptz_3", "timestamp(3) with time zone", "TIMESTAMP '2020-02-12 15:03:00.123 +01:00'", "TIMESTAMP '9999-12-31 23:59:59.999 +12:00'"),
+            new DataMappingCase("timestamptz_6", "timestamp(6) with time zone", "TIMESTAMP '2020-02-12 15:03:00.123456 +01:00'", "TIMESTAMP '9999-12-31 23:59:59.999999 +12:00'"),
+            new DataMappingCase("timestamptz_12", "timestamp(12) with time zone", "TIMESTAMP '2020-02-12 15:03:00.123456789012 +01:00'", "TIMESTAMP '9999-12-31 23:59:59.999999999999 +12:00'"),
+            new DataMappingCase("uuid", "uuid", "UUID '12151fd2-7586-11e9-8f9e-2a86e4085a59'", "UUID 'ffffffff-ffff-ffff-ffff-ffffffffffff'"));
+
     private TrinoQueryRunner() {}
 
     public static Builder builder(DistributedQueryRunner remoteRunner)
@@ -180,8 +214,10 @@ public final class TrinoQueryRunner
                     .setSchema(defaultSchema)
                     .build();
 
+            // The local runner keeps the default worker count so inherited framework
+            // tests exercise a genuinely distributed plan; the remote runner stays at
+            // zero workers to bound test cost.
             DistributedQueryRunner localRunner = DistributedQueryRunner.builder(defaultSession)
-                    .setWorkerCount(0)
                     .addExtraProperty("retry-policy", "NONE")
                     .build();
 
@@ -547,5 +583,17 @@ public final class TrinoQueryRunner
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_unsupported_color AS SELECT rgb(255, 0, 0) AS x");
+
+        // --- Representative data-mapping fixtures (sample/high/null per type) ---
+        for (DataMappingCase dataMappingCase : DATA_MAPPING_CASES) {
+            remoteRunner.execute(memorySession, String.format(
+                    "CREATE TABLE dm_%s AS SELECT * FROM (VALUES (1, CAST(%s AS %s)), (2, CAST(%s AS %s)), (3, CAST(NULL AS %s))) AS t(id, value)",
+                    dataMappingCase.suffix(),
+                    dataMappingCase.sampleLiteral(),
+                    dataMappingCase.type(),
+                    dataMappingCase.highLiteral(),
+                    dataMappingCase.type(),
+                    dataMappingCase.type()));
+        }
     }
 }

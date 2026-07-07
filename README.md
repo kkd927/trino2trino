@@ -74,7 +74,7 @@ SELECT * FROM remote.schema.table LIMIT 10;
 | Projection pushdown | Yes | Trino-native expressions are delegated when the compatibility registry allows them |
 | Aggregation pushdown | Partial | `count`, `count distinct`, `count_if`, `checksum`, `min/max`, `sum`, `avg` are pushed down for supported types; `stddev`, `variance`, `covariance`, `correlation`, `regression` are not |
 | `LIMIT` / `ORDER BY ... LIMIT` | Yes | |
-| Same-remote join pushdown | Partial | Supported join shapes only; `IS NOT DISTINCT FROM`, some inequality joins, and some complex joins are not pushed down |
+| Same-remote join pushdown | Partial | All comparison operators are supported, including `IS NOT DISTINCT FROM` and varchar inequalities; joins stay local when the cost-based strategy declines or a constant join condition is not an exact numeric or varchar |
 | `TABLE(system.query(...))` passthrough | Yes | Row-returning read queries only |
 | Table statistics (`SHOW STATS`) | Yes | Uses remote `SHOW STATS FOR <table>` |
 | `INSERT` / `UPDATE` / `DELETE` / `MERGE` | No | Read-only connector |
@@ -131,7 +131,8 @@ FROM TABLE(
   are accepted; Trino performs no further validation or security checks on
   passthrough SQL, and the execution boundary is remote access control
 - Unlike normal table access, `system.query` is explicit user SQL; remote
-  failures are returned directly and are not treated as fallback candidates.
+  query preparation and execution failures are returned directly and are not
+  treated as fallback candidates.
 
 ## Scope Model
 
@@ -146,6 +147,10 @@ FROM TABLE(
 
 - Read-only connector surface: no `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `CREATE`, `ALTER`, `DROP`
 - `system.query` supports only row-returning read queries; DDL, DML, and CALL statements are rejected before remote execution
+- `CALL system.execute(...)` is inherited from the base JDBC framework and is
+  **not** covered by the read-only enforcement: it executes arbitrary SQL,
+  including writes, on the remote cluster as the configured `connection-user`.
+  As with `system.query`, the execution boundary is remote access control
 - All remote SQL executes as the configured `connection-user`; end-user identity is not propagated
 - Remote session properties and roles are not propagated
 - Session-sensitive functions and casts such as `current_timestamp`,

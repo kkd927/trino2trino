@@ -13,10 +13,14 @@
  */
 package io.trino.plugin.trino;
 
+import io.trino.Session;
+import io.trino.spi.type.TimeZoneKey;
 import io.trino.testing.AbstractTestQueryFramework;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.QueryRunner;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -33,6 +37,67 @@ class TestTrinoTypeMapping
             throws Exception
     {
         return TrinoQueryRunner.createQueryRunner();
+    }
+
+    // =========================================================================
+    // Representative sample/high/null value coverage per type
+    // =========================================================================
+
+    @Test
+    void testRepresentativeDataMapping()
+    {
+        // Replaces the coverage of the base testDataMappingSmokeTest, which requires
+        // CREATE TABLE through the connector and is skipped for read-only connectors
+        for (TrinoQueryRunner.DataMappingCase dataMappingCase : TrinoQueryRunner.DATA_MAPPING_CASES) {
+            String table = "remote.default.dm_" + dataMappingCase.suffix();
+            String sampleValue = "CAST(" + dataMappingCase.sampleLiteral() + " AS " + dataMappingCase.type() + ")";
+            String highValue = "CAST(" + dataMappingCase.highLiteral() + " AS " + dataMappingCase.type() + ")";
+
+            assertThat(query("SELECT value FROM " + table + " WHERE id = 1"))
+                    .matches("VALUES " + sampleValue);
+            assertThat(query("SELECT value FROM " + table + " WHERE id = 2"))
+                    .matches("VALUES " + highValue);
+            assertQuery("SELECT id FROM " + table + " WHERE value = " + sampleValue, "VALUES 1");
+            assertQuery("SELECT id FROM " + table + " WHERE value = " + highValue, "VALUES 2");
+            assertQuery("SELECT id FROM " + table + " WHERE value IS NULL", "VALUES 3");
+        }
+    }
+
+    @Test
+    void testTemporalTransportAcrossSessionTimeZones()
+    {
+        // Temporal transport decodes timestamps from strings; the decoded value must
+        // not depend on the session zone. UTC + a non-hour offset (Kathmandu) + a DST
+        // zone (Warsaw) form the minimal defense line.
+        for (String zone : List.of("UTC", "Asia/Kathmandu", "Europe/Warsaw")) {
+            Session session = Session.builder(getSession())
+                    .setTimeZoneKey(TimeZoneKey.getTimeZoneKey(zone))
+                    .build();
+
+            assertThat(query(session, "SELECT value FROM remote.default.dm_timestamp_12 WHERE id = 1"))
+                    .matches("VALUES CAST(TIMESTAMP '2020-02-12 15:03:00.123456789012' AS timestamp(12))");
+            assertThat(query(session, "SELECT value FROM remote.default.dm_timestamp_12 WHERE id = 2"))
+                    .matches("VALUES CAST(TIMESTAMP '2199-12-31 23:59:59.999999999999' AS timestamp(12))");
+            assertThat(query(session, "SELECT value FROM remote.default.dm_timestamptz_12 WHERE id = 1"))
+                    .matches("VALUES CAST(TIMESTAMP '2020-02-12 15:03:00.123456789012 +01:00' AS timestamp(12) with time zone)");
+            assertThat(query(session, "SELECT value FROM remote.default.dm_timestamptz_12 WHERE id = 2"))
+                    .matches("VALUES CAST(TIMESTAMP '9999-12-31 23:59:59.999999999999 +12:00' AS timestamp(12) with time zone)");
+            assertThat(query(session, "SELECT value FROM remote.default.dm_timestamptz_3 WHERE id = 1"))
+                    .matches("VALUES CAST(TIMESTAMP '2020-02-12 15:03:00.123 +01:00' AS timestamp(3) with time zone)");
+            assertThat(query(session, "SELECT value FROM remote.default.dm_time_12 WHERE id = 1"))
+                    .matches("VALUES CAST(TIME '15:03:00.123456789012' AS time(12))");
+            assertThat(query(session, "SELECT CAST(x AS VARCHAR) FROM remote.default.test_timetz3"))
+                    .matches("VALUES CAST('10:30:45.123+09:00' AS varchar)");
+        }
+
+        // Typed-bind predicate leg: one representative zone is enough — bound values
+        // carry their own zone/offset, so binding is session-zone independent
+        Session kathmandu = Session.builder(getSession())
+                .setTimeZoneKey(TimeZoneKey.getTimeZoneKey("Asia/Kathmandu"))
+                .build();
+        assertQuery(kathmandu, "SELECT id FROM remote.default.dm_timestamp_12 WHERE value = TIMESTAMP '2020-02-12 15:03:00.123456789012'", "VALUES 1");
+        assertQuery(kathmandu, "SELECT id FROM remote.default.dm_timestamptz_12 WHERE value = TIMESTAMP '2020-02-12 15:03:00.123456789012 +01:00'", "VALUES 1");
+        assertQuery(kathmandu, "SELECT id FROM remote.default.dm_timestamptz_3 WHERE value = TIMESTAMP '2020-02-12 15:03:00.123 +01:00'", "VALUES 1");
     }
 
     // =========================================================================
@@ -393,8 +458,10 @@ class TestTrinoTypeMapping
     {
         // Regression: TIME constants in delegated expressions bind through toWriteMapping,
         // which used the standard write function rejected by the Trino JDBC driver
-        // ("Unsupported object type: java.time.LocalTime")
-        MaterializedResult result = computeActual("SELECT x = TIME '10:30:45' FROM remote.default.test_time ORDER BY 1");
+        // ("Unsupported object type: java.time.LocalTime"). The OR keeps the expression
+        // off the tuple-domain path so the constant stays a renderer-bound parameter.
+        MaterializedResult result = computeActual(
+                "SELECT (x = TIME '10:30:45' OR x IS NULL) FROM remote.default.test_time ORDER BY 1");
         assertThat(result.getRowCount()).isEqualTo(2);
         assertThat(result.getMaterializedRows().get(0).getField(0)).isEqualTo(false);
         assertThat(result.getMaterializedRows().get(1).getField(0)).isEqualTo(true);

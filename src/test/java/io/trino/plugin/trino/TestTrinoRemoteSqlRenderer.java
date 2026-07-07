@@ -209,6 +209,29 @@ class TestTrinoRemoteSqlRenderer
     }
 
     @Test
+    void testBareConstantComparisonProjectionFallsBackToLocalEvaluation()
+    {
+        // The bare column-to-constant comparison gate fires on any top-level
+        // expression, so projections of this shape are not delegated either
+        ConnectorExpression comparison = new Call(
+                BOOLEAN,
+                StandardFunctions.EQUAL_OPERATOR_FUNCTION_NAME,
+                List.of(new Variable("status", VARCHAR), varcharConstant("OPEN")));
+        Map<String, ColumnHandle> assignments = Map.of("status", column("status", VARCHAR_TYPE_HANDLE, VARCHAR));
+
+        assertThat(renderer.renderProjection(SESSION, comparison, assignments, capabilities)).isEmpty();
+
+        // Only the top-level shape is reserved for the baseline rewriter contract;
+        // the same comparison nested in a larger expression still renders
+        ConnectorExpression disjunction = new Call(
+                BOOLEAN,
+                StandardFunctions.OR_FUNCTION_NAME,
+                List.of(comparison, new Call(BOOLEAN, StandardFunctions.IS_NULL_FUNCTION_NAME, List.of(new Variable("status", VARCHAR)))));
+
+        assertThat(renderer.renderProjection(SESSION, disjunction, assignments, capabilities)).isPresent();
+    }
+
+    @Test
     void testFieldDereference()
     {
         RowType rowType = RowType.from(List.of(RowType.field("name", VARCHAR), RowType.field("age", BIGINT)));

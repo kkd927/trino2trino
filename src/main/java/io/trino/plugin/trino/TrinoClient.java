@@ -175,7 +175,7 @@ public class TrinoClient
                         new ImplementCountAll(BIGINT_TYPE_HANDLE),
                         new ImplementCount(BIGINT_TYPE_HANDLE),
                         new ImplementCountDistinct(BIGINT_TYPE_HANDLE, true),
-                        new ImplementMinMax(false), // Trino has no collation differences
+                        new ImplementMinMax(true), // both sides share Trino ordering semantics
                         new ImplementSum(TrinoClient::decimalTypeHandle),
                         new ImplementAvgFloatingPoint(),
                         new ImplementAvgDecimal()));
@@ -280,17 +280,6 @@ public class TrinoClient
     public boolean isTopNGuaranteed(ConnectorSession session)
     {
         return true;
-    }
-
-    @Override
-    public boolean supportsAggregationPushdown(
-            ConnectorSession session,
-            JdbcTableHandle handle,
-            List<AggregateFunction> aggregates,
-            Map<String, ColumnHandle> assignments,
-            List<List<ColumnHandle>> groupingSets)
-    {
-        return aggregates.stream().noneMatch(TrinoClient::isTextualMinMax);
     }
 
     @Override
@@ -768,17 +757,6 @@ public class TrinoClient
         return columns.stream()
                 .filter(column -> column.getColumnName().equalsIgnoreCase(columnName))
                 .findFirst();
-    }
-
-    private static boolean isTextualMinMax(AggregateFunction aggregate)
-    {
-        String functionName = aggregate.getFunctionName();
-        if (!functionName.equals("min") && !functionName.equals("max")) {
-            return false;
-        }
-        return aggregate.getArguments().stream()
-                .map(ConnectorExpression::getType)
-                .anyMatch(type -> type instanceof VarcharType || type instanceof CharType);
     }
 
     private static boolean isHiddenJdbcColumn(ColumnHandle columnHandle)

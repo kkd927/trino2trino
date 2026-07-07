@@ -180,8 +180,8 @@ FROM TABLE(
   control
 - while normal table access maps 1:1 to the configured remote catalog,
   passthrough SQL is an explicit escape hatch from that mapping
-- remote failures are returned directly; explicit passthrough SQL is not a
-  fallback candidate
+- remote query preparation and execution failures are returned directly;
+  explicit passthrough SQL is not a fallback candidate
 
 ## SQL support
 
@@ -290,6 +290,10 @@ otherwise compatible.
 - ``system.query`` supports only row-returning read queries; statement-level
   writes (DDL, DML, ``CALL``) are rejected before remote execution, and no
   further validation is performed on passthrough SQL
+- ``CALL system.execute(...)`` is inherited from the base JDBC framework and
+  is not covered by the read-only enforcement: it executes arbitrary SQL,
+  including writes, on the remote cluster as the configured connection user;
+  the execution boundary is remote access control
 - Negative dates (before year 0001) are not preserved correctly through JDBC
 - Cross-cluster joins can only be improved with pushdown and statistics; the
   connector cannot remove the structural cost of federating between clusters
