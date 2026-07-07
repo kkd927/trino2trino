@@ -249,10 +249,7 @@ Remote delegation modes:
   pushdown path enabled
 
 The equivalent catalog session properties are
-``remote_delegation_enabled`` and ``remote_delegation_mode``. ``EXPLAIN`` shows
-delegated query relations with a marker such as
-``RemoteTrinoQuery[catalog=memory, delegated=true]`` without inlining bind
-values.
+``remote_delegation_enabled`` and ``remote_delegation_mode``.
 
 Pushdown behavior for transport-backed columns is split:
 

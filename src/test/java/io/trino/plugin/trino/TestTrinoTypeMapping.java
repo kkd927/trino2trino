@@ -323,8 +323,11 @@ class TestTrinoTypeMapping
         MaterializedResult result = computeActual(sql);
         assertThat(result.getOnlyValue()).isEqualTo("1.1");
 
+        // The predicate and the arithmetic projection are delegated remotely: the scan
+        // collapses into a query relation and no local filter remains above it
         String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
-        assertThat(explain).contains("RemoteTrinoQuery[catalog=memory, delegated=true]");
+        assertThat(explain).contains("remote:Query[");
+        assertThat(explain).doesNotContain("ScanFilterProject");
     }
 
     @Test
@@ -363,6 +366,38 @@ class TestTrinoTypeMapping
         MaterializedResult result = computeActual("SELECT x FROM remote.default.test_time6");
         assertThat(result.getRowCount()).isEqualTo(1);
         assertThat(result.getMaterializedRows().get(0).getField(0).toString()).isEqualTo("10:30:45.123456");
+    }
+
+    @Test
+    void testTimePredicatePushdown()
+    {
+        // Regression: the time column mapping used to bind pushed-down predicate values
+        // as "TIME '...'" strings, which the remote rejects as time = varchar
+        assertThat(query("SELECT x FROM remote.default.test_time WHERE x = TIME '10:30:45'"))
+                .isFullyPushedDown();
+        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_time WHERE x = TIME '10:30:45'");
+        assertThat(result.getRowCount()).isEqualTo(1);
+        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).isEqualTo("10:30:45");
+
+        MaterializedResult range = computeActual("SELECT x FROM remote.default.test_time WHERE x > TIME '12:00:00'");
+        assertThat(range.getRowCount()).isEqualTo(1);
+        assertThat(range.getMaterializedRows().get(0).getField(0).toString()).isEqualTo("23:59:59");
+
+        MaterializedResult precise = computeActual("SELECT x FROM remote.default.test_time6 WHERE x = TIME '10:30:45.123456'");
+        assertThat(precise.getRowCount()).isEqualTo(1);
+        assertThat(precise.getMaterializedRows().get(0).getField(0).toString()).isEqualTo("10:30:45.123456");
+    }
+
+    @Test
+    void testTimeConstantParameterInDelegatedProjection()
+    {
+        // Regression: TIME constants in delegated expressions bind through toWriteMapping,
+        // which used the standard write function rejected by the Trino JDBC driver
+        // ("Unsupported object type: java.time.LocalTime")
+        MaterializedResult result = computeActual("SELECT x = TIME '10:30:45' FROM remote.default.test_time ORDER BY 1");
+        assertThat(result.getRowCount()).isEqualTo(2);
+        assertThat(result.getMaterializedRows().get(0).getField(0)).isEqualTo(false);
+        assertThat(result.getMaterializedRows().get(1).getField(0)).isEqualTo(true);
     }
 
     @Test

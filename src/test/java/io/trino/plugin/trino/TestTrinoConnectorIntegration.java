@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.trino;
 
+import io.trino.Session;
 import io.trino.testing.AbstractTestQueryFramework;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.QueryRunner;
@@ -415,6 +416,21 @@ public class TestTrinoConnectorIntegration
     }
 
     @Test
+    void testQueryPassthroughPreservesRemoteError()
+    {
+        // A query that fails remote preparation (unknown table) must surface the
+        // remote error instead of a generic connector failure
+        assertThatThrownBy(() -> computeActual(
+                """
+                SELECT *
+                FROM TABLE(remote.system.query(
+                    query => 'SELECT x FROM memory.default.no_such_table_anywhere'
+                ))
+                """))
+                .hasMessageContaining("no_such_table_anywhere");
+    }
+
+    @Test
     void testQueryPassthroughRejectsOtherRemoteCatalog()
     {
         assertThatThrownBy(() -> computeActual(
@@ -523,6 +539,19 @@ public class TestTrinoConnectorIntegration
                 .isPresent();
     }
 
+    @Test
+    void testStatisticsDisabledConfig()
+    {
+        // Baseline: remote statistics feed optimizer estimates when enabled (default)
+        String enabled = computeActual("EXPLAIN SELECT nationkey FROM remote.default.nation").getOnlyValue().toString();
+        assertThat(enabled).contains("rows: 25");
+
+        // Regression: statistics.enabled was bound but ignored, so remote SHOW STATS
+        // statistics flowed into estimates even when disabled
+        String disabled = computeActual("EXPLAIN SELECT nationkey FROM remote_stats_disabled.default.nation").getOnlyValue().toString();
+        assertThat(disabled).doesNotContain("rows: 25");
+    }
+
     // =========================================================================
     // 13. Pushdown verification
     //
@@ -628,6 +657,28 @@ public class TestTrinoConnectorIntegration
     }
 
     @Test
+    void testJoinPushdownWithTransportColumn()
+    {
+        // Regression: the transport projection (CAST wrapping) used to be applied both when
+        // synthesizing join sources and again at final scan, so a JSON-transport column
+        // selected through a pushed-down join failed remotely (cast of already-cast varchar)
+        Session eagerJoinPushdown = Session.builder(getSession())
+                .setCatalogSessionProperty("remote", "join_pushdown_strategy", "EAGER")
+                .build();
+        String sql =
+                """
+                SELECT b.id, a.unsupported_col
+                FROM remote.default.test_nested_unsupported_array a
+                JOIN remote.default.test_nested_unsupported_map b ON a.id = b.id
+                """;
+        assertThat(query(eagerJoinPushdown, sql)).isFullyPushedDown();
+        MaterializedResult result = computeActual(eagerJoinPushdown, sql);
+        assertThat(result.getRowCount()).isEqualTo(1);
+        assertThat(result.getMaterializedRows().get(0).getField(0)).isEqualTo("id1");
+        assertThat(result.getMaterializedRows().get(0).getField(1).toString()).contains("10:30:45.123+09:00");
+    }
+
+    @Test
     void testComplexFunctionRemoteDelegation()
     {
         String sql =
@@ -643,8 +694,28 @@ public class TestTrinoConnectorIntegration
         assertThat(result.getOnlyColumnAsSet()).containsExactly("100", "200");
 
         String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
-        assertThat(explain).contains("RemoteTrinoQuery[catalog=memory, delegated=true]");
         assertThat(explain).doesNotContain("ScanFilterProject");
+    }
+
+    @Test
+    void testComplexConstantPredicateFallsBackLocally()
+    {
+        // Regression: a complex-typed constant in a delegated predicate was emitted as
+        // a QueryParameter with no bindable path, failing at scan time
+        MaterializedResult result = computeActual(
+                "SELECT path FROM remote.default.test_delegation_log WHERE contains(ARRAY[BIGINT '1', BIGINT '3'], regionkey) ORDER BY path");
+        assertThat(result.getOnlyColumnAsSet()).containsExactly("/post/100", "/post/200");
+    }
+
+    @Test
+    void testComplexConstantProjectionFallsBackLocally()
+    {
+        // Regression: same as above, through the projection path
+        MaterializedResult result = computeActual(
+                "SELECT concat(x, ARRAY[9, 9]) FROM remote.default.test_array_int");
+        assertThat(result.getOnlyColumnAsSet()).containsExactlyInAnyOrder(
+                java.util.List.of(1, 2, 3, 9, 9),
+                java.util.List.of(4, 5, 9, 9));
     }
 
     @Test
@@ -664,7 +735,6 @@ public class TestTrinoConnectorIntegration
         assertThat(result.getOnlyColumnAsSet()).containsExactly("100", "200");
 
         String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
-        assertThat(explain).doesNotContain("RemoteTrinoQuery[catalog=memory, delegated=true]");
         assertThat(explain).contains("ScanFilterProject");
         assertThat(explain).contains("from_iso8601_timestamp");
     }
@@ -690,8 +760,11 @@ public class TestTrinoConnectorIntegration
         assertThat(result.getMaterializedRows().getFirst().getField(0)).isEqualTo("AMERICA");
         assertThat(result.getMaterializedRows().getFirst().getField(1)).isEqualTo(2L);
 
+        // The remote subtree (filter + aggregation) is delegated: the remote branch
+        // collapses into a query relation scan and no local aggregation remains
         String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
-        assertThat(explain).contains("RemoteTrinoQuery[catalog=memory, delegated=true]");
+        assertThat(explain).contains("remote:Query[");
+        assertThat(explain).doesNotContain("Aggregate");
     }
 
     // =========================================================================

@@ -43,7 +43,6 @@ import io.trino.spi.type.UuidType;
 import io.trino.spi.type.VarcharType;
 
 import java.sql.Types;
-import java.time.LocalTime;
 import java.util.Optional;
 import java.util.function.Function;
 
@@ -134,7 +133,7 @@ final class TrinoReadMappingFactory
         return ColumnMapping.longMapping(
                 timeType,
                 (rs, idx) -> TemporalTransportCodec.parseTimeToPicos(rs.getString(idx)),
-                (stmt, idx, picosOfDay) -> stmt.setObject(idx, "TIME '" + LocalTime.ofNanoOfDay(picosOfDay / 1_000L) + "'"),
+                TemporalTransportCodec.timeWriteFunction(timeType),
                 FULL_PUSHDOWN);
     }
 

@@ -17,6 +17,7 @@ import io.airlift.slice.Slices;
 import io.trino.plugin.jdbc.JdbcColumnHandle;
 import io.trino.plugin.jdbc.JdbcTypeHandle;
 import io.trino.plugin.jdbc.expression.ParameterizedExpression;
+import io.trino.spi.block.BlockBuilder;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.expression.Call;
@@ -174,6 +175,39 @@ class TestTrinoRemoteSqlRenderer
         assertThat(rewritten.expression()).isEqualTo("(\"x\" + CAST(? AS number))");
         assertThat(rewritten.parameters()).hasSize(1);
         assertThat(rewritten.parameters().getFirst().getType()).isEqualTo(NUMBER);
+    }
+
+    @Test
+    void testComplexConstantFallsBackToLocalEvaluation()
+    {
+        // Regression: complex-typed constants were emitted as QueryParameters, whose
+        // only handle-less binding path (toWriteMapping) rejects complex values
+        ArrayType arrayType = new ArrayType(BIGINT);
+        BlockBuilder arrayValue = BIGINT.createBlockBuilder(null, 2);
+        BIGINT.writeLong(arrayValue, 1);
+        BIGINT.writeLong(arrayValue, 2);
+        ConnectorExpression arrayComparison = new Call(
+                BOOLEAN,
+                StandardFunctions.EQUAL_OPERATOR_FUNCTION_NAME,
+                List.of(new Variable("tags", arrayType), new Constant(arrayValue.build(), arrayType)));
+
+        assertThat(renderer.renderExpression(SESSION, arrayComparison, Map.of("tags", column("tags", VARCHAR_TYPE_HANDLE, arrayType)), capabilities))
+                .isEmpty();
+    }
+
+    @Test
+    void testNullComplexConstantRendersTypedNull()
+    {
+        // NULL complex constants carry no parameter, so they remain renderable
+        ArrayType arrayType = new ArrayType(BIGINT);
+        ConnectorExpression nullComparison = new Call(
+                BOOLEAN,
+                StandardFunctions.IDENTICAL_OPERATOR_FUNCTION_NAME,
+                List.of(new Variable("tags", arrayType), new Constant(null, arrayType)));
+
+        ParameterizedExpression rewritten = render(nullComparison, Map.of("tags", column("tags", VARCHAR_TYPE_HANDLE, arrayType)));
+        assertThat(rewritten.expression()).isEqualTo("(\"tags\" IS NOT DISTINCT FROM CAST(NULL AS array(bigint)))");
+        assertThat(rewritten.parameters()).isEmpty();
     }
 
     @Test

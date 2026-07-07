@@ -57,6 +57,7 @@ public final class TrinoQueryRunner
                 .setRemoteCatalog("memory")
                 .setDefaultSchema("default")
                 .withComplexTypeTestData()
+                .withStatisticsDisabledCatalog()
                 .build();
     }
 
@@ -128,6 +129,7 @@ public final class TrinoQueryRunner
         private String remoteCatalog = "";
         private String defaultSchema = "tiny";
         private boolean withComplexTypeTestData;
+        private boolean withStatisticsDisabledCatalog;
 
         private Builder(DistributedQueryRunner remoteRunner)
         {
@@ -155,6 +157,16 @@ public final class TrinoQueryRunner
         public Builder withComplexTypeTestData()
         {
             this.withComplexTypeTestData = true;
+            return this;
+        }
+
+        /**
+         * Also creates a "remote_stats_disabled" catalog pointing at the same remote
+         * with {@code statistics.enabled=false}, without booting another cluster.
+         */
+        public Builder withStatisticsDisabledCatalog()
+        {
+            this.withStatisticsDisabledCatalog = true;
             return this;
         }
 
@@ -189,6 +201,14 @@ public final class TrinoQueryRunner
 
             localRunner.installPlugin(new TrinoPlugin());
             localRunner.createCatalog("remote", "trino", properties);
+
+            if (withStatisticsDisabledCatalog) {
+                Map<String, String> statsDisabledProperties = ImmutableMap.<String, String>builder()
+                        .putAll(properties)
+                        .put("statistics.enabled", "false")
+                        .buildOrThrow();
+                localRunner.createCatalog("remote_stats_disabled", "trino", statsDisabledProperties);
+            }
 
             if (withComplexTypeTestData) {
                 createTestData(remoteRunner);

@@ -32,6 +32,7 @@ import io.trino.spi.type.Type;
 
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -45,6 +46,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static io.trino.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
+import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
+import static io.trino.spi.type.Timestamps.round;
 import static java.lang.Math.toIntExact;
 
 final class TemporalTransportCodec
@@ -144,6 +147,29 @@ final class TemporalTransportCodec
     {
         String bindType = "time(" + type.getPrecision() + ")";
         return stringLongTransportWriteFunction(bindType, value -> formatTimeValue(value, type.getPrecision()));
+    }
+
+    /**
+     * Binds a time parameter as an explicitly typed JDBC TIME value. The Trino JDBC
+     * driver rejects untyped {@code setObject(LocalTime)}, so the standard
+     * {@code StandardColumnMappings.timeWriteFunction} cannot be used. An explicit
+     * target type makes the driver render a typed {@code TIME '...'} literal, which
+     * also keeps the parameter correctly typed where bind expressions are not applied
+     * (renderer-emitted {@code ?} placeholders).
+     */
+    static LongWriteFunction timeWriteFunction(TimeType type)
+    {
+        int precision = type.getPrecision();
+        if (precision > 9) {
+            throw new TrinoException(NOT_SUPPORTED, "Unsupported parameter type for pushdown: " + type);
+        }
+        return (statement, index, picosOfDay) -> {
+            long rounded = round(picosOfDay, 12 - precision);
+            if (rounded == PICOSECONDS_PER_DAY) {
+                rounded = 0;
+            }
+            statement.setObject(index, LocalTime.ofNanoOfDay(rounded / 1_000L), Types.TIME);
+        };
     }
 
     static LongWriteFunction shortTimestampTransportWriteFunction(TimestampType type)
