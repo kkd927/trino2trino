@@ -97,42 +97,44 @@ commands.
    diff, then rerun `mvn clean verify`. If Checkstyle reports a mechanical
    source-modernization rule from the new Trino/Airlift parent, make the
    smallest syntax-only change and rerun the failing Maven stage.
-8. Run the strict same-version remote Delta smoke if Docker and the target image are
-   available:
+8. Run the strict same-version remote Delta smoke release gate:
 
    ```bash
    docker manifest inspect "trinodb/trino:${requested_version}" >/dev/null
    ```
 
-   When the image exists and `testing/remote-delta-smoke/run.sh` is present, run:
+   Fail the release preparation with an exact reason if Docker is unavailable,
+   `testing/remote-delta-smoke/run.sh` is missing, or
+   `trinodb/trino:${requested_version}` has no Docker image manifest. Otherwise
+   run:
 
    ```bash
    testing/remote-delta-smoke/run.sh
    ```
 
-   If Docker, the image, or the smoke script is unavailable, report that it was
-   skipped with the exact reason.
-9. Run the remote version smoke probe as a report-only release diagnostic:
-   - Select probe versions:
+   If the smoke fails, stop the release preparation and record the failing
+   command and `target/remote-delta-smoke/` log directory.
+9. Run the remote version smoke release gate:
+   - Select remote version smoke versions:
 
      ```bash
-     read -r -a basic_probe_versions < <("${skill_dir}/scripts/select-basic-probe-versions.sh" "$requested_version")
+     read -r -a remote_version_smoke_versions < <("${skill_dir}/scripts/select-remote-version-smoke-versions.sh" "$requested_version")
      ```
 
-   - For each selected remote version, skip the probe with an exact reason if
-     Docker is unavailable, `testing/remote-version-smoke/run.sh` is missing, or
-     either `trinodb/trino:${requested_version}` or
-     `trinodb/trino:${remote_version}` has no Docker image manifest.
+   - Fail the release preparation with an exact reason if Docker is unavailable,
+     `testing/remote-version-smoke/run.sh` is missing, or either
+     `trinodb/trino:${requested_version}` or `trinodb/trino:${remote_version}`
+     has no Docker image manifest.
    - Otherwise run:
 
      ```bash
      testing/remote-version-smoke/run.sh "$remote_version"
      ```
 
-   - If the probe fails, do not stop the release preparation. Record the remote
+   - If the smoke fails, stop the release preparation. Record the remote
      version, the failing command, and the log directory
      `target/remote-version-smoke/${requested_version}-to-${remote_version}/`.
-   - Report this only as a remote version diagnostic probe, not as a cross-version
+   - Report this only as a bounded remote version smoke gate, not as a cross-version
      compatibility guarantee.
 10. Commit on `main`:
 
@@ -144,9 +146,8 @@ commands.
    not commit on `release/trino-M`.
 11. Final report:
     - summarize changes, tests, and release-note items that affected code;
-    - summarize remote Delta smoke and remote version smoke probe results, including
-      skipped probes or report-only failures with remote version, command, and
-      log location;
+    - summarize remote Delta smoke and remote version smoke results, including
+      selected remote versions and any failing command or log location;
     - print `git push origin release/trino-M` only when
       `preserve_branch_push_needed=true`;
     - print `git push origin main`;
@@ -212,42 +213,44 @@ commands.
    `mvn clean verify`. If Checkstyle reports a mechanical
    source-modernization rule from the selected Trino/Airlift parent, make the
    smallest syntax-only change and rerun the failing Maven stage.
-8. Run the strict same-version remote Delta smoke if Docker and the target image are
-   available:
+8. Run the strict same-version remote Delta smoke release gate:
 
    ```bash
    docker manifest inspect "trinodb/trino:${requested_version}" >/dev/null
    ```
 
-   When the image exists and `testing/remote-delta-smoke/run.sh` is present, run:
+   Fail the release preparation with an exact reason if Docker is unavailable,
+   `testing/remote-delta-smoke/run.sh` is missing, or
+   `trinodb/trino:${requested_version}` has no Docker image manifest. Otherwise
+   run:
 
    ```bash
    testing/remote-delta-smoke/run.sh
    ```
 
-   If Docker, the image, or the smoke script is unavailable, report that it was
-   skipped with the exact reason.
-9. Run the remote version smoke probe as a report-only release diagnostic:
-   - Select probe versions:
+   If the smoke fails, stop the release preparation and record the failing
+   command and `target/remote-delta-smoke/` log directory.
+9. Run the remote version smoke release gate:
+   - Select remote version smoke versions:
 
      ```bash
-     read -r -a basic_probe_versions < <("${skill_dir}/scripts/select-basic-probe-versions.sh" "$requested_version")
+     read -r -a remote_version_smoke_versions < <("${skill_dir}/scripts/select-remote-version-smoke-versions.sh" "$requested_version")
      ```
 
-   - For each selected remote version, skip the probe with an exact reason if
-     Docker is unavailable, `testing/remote-version-smoke/run.sh` is missing, or
-     either `trinodb/trino:${requested_version}` or
-     `trinodb/trino:${remote_version}` has no Docker image manifest.
+   - Fail the release preparation with an exact reason if Docker is unavailable,
+     `testing/remote-version-smoke/run.sh` is missing, or either
+     `trinodb/trino:${requested_version}` or `trinodb/trino:${remote_version}`
+     has no Docker image manifest.
    - Otherwise run:
 
      ```bash
      testing/remote-version-smoke/run.sh "$remote_version"
      ```
 
-   - If the probe fails, do not stop the release preparation. Record the remote
+   - If the smoke fails, stop the release preparation. Record the remote
      version, the failing command, and the log directory
      `target/remote-version-smoke/${requested_version}-to-${remote_version}/`.
-   - Report this only as a remote version diagnostic probe, not as a cross-version
+   - Report this only as a bounded remote version smoke gate, not as a cross-version
      compatibility guarantee.
 10. Commit on the backport branch:
 
@@ -258,9 +261,8 @@ commands.
    Include new files with `git add` first if code adaptation created them.
 11. Final report:
    - summarize changes, tests, and release-note evidence that affected code;
-   - summarize remote Delta smoke and remote version smoke probe results, including
-     skipped probes or report-only failures with remote version, command, and
-     log location;
+   - summarize remote Delta smoke and remote version smoke results, including
+     selected remote versions and any failing command or log location;
    - print `git push origin release/trino-N`;
    - print `git tag <next_tag> && git push origin <next_tag>`;
    - state that `main` was not changed and pushing the tag triggers GitHub

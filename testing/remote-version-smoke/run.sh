@@ -179,11 +179,20 @@ run_version() (
   echo "Running CHAR/VARCHAR remote delegation assertions"
   trino_exec trino-remote-version "DROP TABLE IF EXISTS memory.default.remote_version_char_probe" >/dev/null
   trino_exec trino-remote-version "CREATE TABLE memory.default.remote_version_char_probe AS SELECT * FROM (VALUES (1, CAST('a' AS CHAR(3)), VARCHAR 'a'), (2, CAST('a' AS CHAR(3)), VARCHAR 'a  '), (3, CAST('b' AS CHAR(3)), VARCHAR 'b  ')) AS t(id, c, v)" >/dev/null
-  assert_query_equals $'[a]\t1' "SELECT '[' || CAST(c AS VARCHAR) || ']', length(CAST(c AS VARCHAR)) FROM remote_memory.default.remote_version_char_probe WHERE id = 1"
-  assert_query_equals "1" "SELECT id FROM remote_memory.default.remote_version_char_probe WHERE v = c ORDER BY id"
-  assert_query_equals $'1\n2' "SELECT id FROM remote_memory.default.remote_version_char_probe WHERE c = CAST('a' AS CHAR(3)) ORDER BY id"
-  assert_query_equals "1" "SELECT id FROM remote_memory.default.remote_version_char_probe WHERE v = CAST('a' AS CHAR(3)) ORDER BY id"
-  if [[ "${remote_version}" -lt 482 ]]; then
+  local char_cast_expected
+  local char_varchar_predicate_expected
+  local char_constant_predicate_expected
+  local varchar_char_constant_predicate_expected
+  char_cast_expected="$(trino_exec trino-local-version "SELECT '[' || CAST(CAST('a' AS CHAR(3)) AS VARCHAR) || ']', length(CAST(CAST('a' AS CHAR(3)) AS VARCHAR))")"
+  char_varchar_predicate_expected="$(trino_exec trino-local-version "SELECT id FROM (VALUES (1, CAST('a' AS CHAR(3)), VARCHAR 'a'), (2, CAST('a' AS CHAR(3)), VARCHAR 'a  '), (3, CAST('b' AS CHAR(3)), VARCHAR 'b  ')) AS t(id, c, v) WHERE v = c ORDER BY id")"
+  char_constant_predicate_expected="$(trino_exec trino-local-version "SELECT id FROM (VALUES (1, CAST('a' AS CHAR(3)), VARCHAR 'a'), (2, CAST('a' AS CHAR(3)), VARCHAR 'a  '), (3, CAST('b' AS CHAR(3)), VARCHAR 'b  ')) AS t(id, c, v) WHERE c = CAST('a' AS CHAR(3)) ORDER BY id")"
+  varchar_char_constant_predicate_expected="$(trino_exec trino-local-version "SELECT id FROM (VALUES (1, CAST('a' AS CHAR(3)), VARCHAR 'a'), (2, CAST('a' AS CHAR(3)), VARCHAR 'a  '), (3, CAST('b' AS CHAR(3)), VARCHAR 'b  ')) AS t(id, c, v) WHERE v = CAST('a' AS CHAR(3)) ORDER BY id")"
+
+  assert_query_equals "${char_cast_expected}" "SELECT '[' || CAST(c AS VARCHAR) || ']', length(CAST(c AS VARCHAR)) FROM remote_memory.default.remote_version_char_probe WHERE id = 1"
+  assert_query_equals "${char_varchar_predicate_expected}" "SELECT id FROM remote_memory.default.remote_version_char_probe WHERE v = c ORDER BY id"
+  assert_query_equals "${char_constant_predicate_expected}" "SELECT id FROM remote_memory.default.remote_version_char_probe WHERE c = CAST('a' AS CHAR(3)) ORDER BY id"
+  assert_query_equals "${varchar_char_constant_predicate_expected}" "SELECT id FROM remote_memory.default.remote_version_char_probe WHERE v = CAST('a' AS CHAR(3)) ORDER BY id"
+  if [[ "${local_version}" -ge 482 && "${remote_version}" -lt 482 ]]; then
     assert_query_contains "trim(TRAILING ' ' FROM" "EXPLAIN SELECT '[' || CAST(c AS VARCHAR) || ']', length(CAST(c AS VARCHAR)) FROM remote_memory.default.remote_version_char_probe WHERE id = 1"
     assert_query_contains "trim(TRAILING ' ' FROM" "EXPLAIN SELECT id FROM remote_memory.default.remote_version_char_probe WHERE v = c ORDER BY id"
   fi

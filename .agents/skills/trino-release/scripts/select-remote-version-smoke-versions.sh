@@ -59,22 +59,6 @@ highest_less_than() {
   printf '%s' "${match}"
 }
 
-highest_at_most() {
-  local ceiling="$1"
-  local index
-  local version
-  local match=""
-
-  for ((index = 0; index < version_count; index++)); do
-    version="${versions[index]}"
-    if (( 10#${version} <= ceiling )) && [[ "${version}" != "${target_version}" ]]; then
-      match="${version}"
-    fi
-  done
-
-  printf '%s' "${match}"
-}
-
 newest_not_target() {
   local index
 
@@ -88,24 +72,25 @@ newest_not_target() {
 
 oldest="${versions[0]}"
 newest="${versions[$((version_count - 1))]}"
+middle="${versions[$(((version_count - 1) / 2))]}"
 
-if (( 10#${target_version} > 10#${newest} )); then
+if (( 10#${target_version} >= 10#${newest} )); then
   add_version "${oldest}"
-  if [[ "${version_count}" -ge 2 ]]; then
-    add_version "${versions[$((version_count - 2))]}"
-  fi
-elif (( 10#${target_version} < 10#${oldest} )); then
-  if [[ "${version_count}" -ge 2 ]]; then
-    add_version "${versions[1]}"
-  fi
+  add_version "${middle}"
+elif (( 10#${target_version} <= 10#${oldest} )); then
+  add_version "${middle}"
   add_version "${newest}"
 else
-  add_version "${oldest}"
-  add_version "$(highest_at_most "$((10#${target_version} - 2))")"
+  add_version "$(highest_less_than "${target_version}")"
+  add_version "${newest}"
 fi
 
 if [[ "${selected_count}" -lt 2 ]]; then
-  add_version "$(highest_less_than "${target_version}")"
+  add_version "${middle}"
+fi
+
+if [[ "${selected_count}" -lt 2 ]]; then
+  add_version "${oldest}"
 fi
 
 if [[ "${selected_count}" -lt 2 ]]; then
