@@ -308,8 +308,9 @@ public class TrinoClient
     @Override
     protected boolean isSupportedJoinCondition(ConnectorSession session, JdbcJoinCondition joinCondition)
     {
-        // Both sides are Trino, so these comparison operators are SQL-compatible
-        // when the planner presents them as connector join conditions.
+        // This only declares operator support for the base JDBC join implementation.
+        // Planner-side coercions and rendered join conditions determine whether any
+        // compatibility-sensitive casts are present.
         return switch (joinCondition.getOperator()) {
             case EQUAL,
                  NOT_EQUAL,

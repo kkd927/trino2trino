@@ -157,6 +157,8 @@ FROM TABLE(
   `current_date`, current time zone functions, `from_iso8601_timestamp`, and
   casts that add or remove a session time zone are not delegated unless their
   semantics are represented by explicit, compatible SQL expressions.
+- Remote delegation probes `CHAR` to `VARCHAR` cast semantics and trims legacy
+  remote padding when such casts are pushed down.
 - Negative dates (before year 0001) are not preserved correctly through JDBC
 - Cross-cluster joins can only be improved with pushdown and statistics; the connector cannot remove the structural cost of federating between clusters
 - Tested against Trino 482 querying remote Trino 482; cross-version compatibility is not claimed yet

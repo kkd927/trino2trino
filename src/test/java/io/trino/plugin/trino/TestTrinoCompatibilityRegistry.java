@@ -28,6 +28,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static io.airlift.slice.Slices.utf8Slice;
+import static io.trino.plugin.trino.TrinoRemoteCapabilities.CharToVarcharCastSemantics.TRIMS_TRAILING_SPACES;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
 import static io.trino.spi.type.DateType.DATE;
 import static io.trino.spi.type.TimeType.TIME_MILLIS;
@@ -192,6 +193,10 @@ class TestTrinoCompatibilityRegistry
 
     private static TrinoRemoteCapabilities capabilitiesWithRemoteTimeZone(String timeZone, String... functions)
     {
-        return new TrinoRemoteCapabilities(Optional.of("477"), Optional.of(Set.of(functions)), Optional.of(timeZone));
+        return new TrinoRemoteCapabilities(
+                Optional.of("477"),
+                Optional.of(Set.of(functions)),
+                Optional.of(timeZone),
+                Optional.of(TRIMS_TRAILING_SPACES));
     }
 }

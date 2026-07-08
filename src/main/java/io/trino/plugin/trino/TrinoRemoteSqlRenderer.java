@@ -61,6 +61,7 @@ import java.util.function.Function;
 
 import static io.trino.plugin.trino.TrinoCompatibilityRegistry.canonicalName;
 import static io.trino.plugin.trino.TrinoCompatibilityRegistry.isSubscriptFunction;
+import static io.trino.plugin.trino.TrinoRemoteCapabilities.CharToVarcharCastSemantics.RETAINS_TRAILING_SPACES;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
@@ -442,9 +443,24 @@ final class TrinoRemoteSqlRenderer
         if (value.isEmpty()) {
             return Optional.empty();
         }
+
+        ParameterizedExpression renderedValue = value.orElseThrow();
+        String sourceExpression = renderedValue.expression();
+        Type sourceType = call.getArguments().getFirst().getType();
+        Type targetType = call.getType();
+        if (sourceType instanceof CharType && targetType instanceof VarcharType) {
+            Optional<TrinoRemoteCapabilities.CharToVarcharCastSemantics> semantics = capabilities.charToVarcharCastSemantics();
+            if (semantics.isEmpty()) {
+                return Optional.empty();
+            }
+            if (semantics.orElseThrow() == RETAINS_TRAILING_SPACES) {
+                sourceExpression = "trim(TRAILING ' ' FROM " + sourceExpression + ")";
+            }
+        }
+
         return Optional.of(new ParameterizedExpression(
-                (tryCast ? "TRY_CAST(" : "CAST(") + value.orElseThrow().expression() + " AS " + typeName(call.getType()) + ")",
-                value.orElseThrow().parameters()));
+                (tryCast ? "TRY_CAST(" : "CAST(") + sourceExpression + " AS " + typeName(targetType) + ")",
+                renderedValue.parameters()));
     }
 
     private Optional<ParameterizedExpression> renderNary(

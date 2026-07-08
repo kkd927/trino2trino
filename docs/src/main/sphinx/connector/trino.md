@@ -294,6 +294,8 @@ otherwise compatible.
   is not covered by the read-only enforcement: it executes arbitrary SQL,
   including writes, on the remote cluster as the configured connection user;
   the execution boundary is remote access control
+- Remote delegation probes ``CHAR`` to ``VARCHAR`` cast semantics and trims
+  legacy remote padding when such casts are pushed down
 - Negative dates (before year 0001) are not preserved correctly through JDBC
 - Cross-cluster joins can only be improved with pushdown and statistics; the
   connector cannot remove the structural cost of federating between clusters
