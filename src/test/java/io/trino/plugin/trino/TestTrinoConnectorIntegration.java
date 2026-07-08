@@ -687,7 +687,7 @@ public class TestTrinoConnectorIntegration
                 """
                 SELECT regexp_extract(path, '/post/([0-9]+)', 1)
                 FROM remote.default.test_delegation_log
-                WHERE date_trunc('day', CAST(log_timestamp AS timestamp)) = TIMESTAMP '2024-01-15 00:00:00'
+                WHERE date_format(CAST(log_timestamp AS timestamp), '%Y-%m-%d') = '2024-01-15'
                     AND regexp_like(path, '^/post/')
                 ORDER BY 1
                 """;
