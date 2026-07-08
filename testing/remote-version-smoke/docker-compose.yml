@@ -1,13 +1,13 @@
 services:
-  trino-remote-basic:
+  trino-remote-version:
     image: "trinodb/trino:${REMOTE_TRINO_VERSION:?set REMOTE_TRINO_VERSION}"
     volumes:
       - ./conf/remote/catalog:/etc/trino/catalog:ro
 
-  trino-local-basic:
+  trino-local-version:
     image: "trinodb/trino:${LOCAL_TRINO_VERSION:?set LOCAL_TRINO_VERSION}"
     depends_on:
-      - trino-remote-basic
+      - trino-remote-version
     volumes:
       - "../../target/trino-trino-${LOCAL_TRINO_VERSION:?set LOCAL_TRINO_VERSION}:/usr/lib/trino/plugin/trino:ro"
       - ./conf/local/catalog:/etc/trino/catalog:ro

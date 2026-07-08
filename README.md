@@ -169,7 +169,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for build, test, and development instruct
 
 ### Delta Lake smoke test
 
-The default `Build and Test` CI workflow runs a Docker-based Delta Lake smoke
+The default `Build and Test` CI workflow runs a Docker-based remote Delta smoke
 test after `mvn -B clean verify`. It covers the common deployment pattern where
 a smaller federated Trino cluster queries a separate Delta Lake-focused Trino
 cluster.
@@ -178,11 +178,11 @@ To run the same smoke test locally:
 
 ```bash
 mvn -B clean verify
-testing/delta-smoke/run.sh
+testing/remote-delta-smoke/run.sh
 ```
 
-Failure diagnostics are written to `target/delta-smoke/`. See
-[docs/delta-smoke.md](docs/delta-smoke.md) for the topology and assertions.
+Failure diagnostics are written to `target/remote-delta-smoke/`. See
+[docs/remote-delta-smoke.md](docs/remote-delta-smoke.md) for the topology and assertions.
 
 ## License
 

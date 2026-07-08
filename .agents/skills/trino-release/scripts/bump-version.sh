@@ -37,9 +37,9 @@ versioned_files=(
   "docker-compose.yml"
   "CONTRIBUTING.md"
   "docs/src/main/sphinx/connector/trino.md"
-  "docs/delta-smoke.md"
-  "testing/delta-smoke/docker-compose.yml"
-  "testing/delta-smoke/run.sh"
+  "docs/remote-delta-smoke.md"
+  "testing/remote-delta-smoke/docker-compose.yml"
+  "testing/remote-delta-smoke/run.sh"
 )
 
 workflow_files=(
@@ -58,9 +58,9 @@ for file in \
   "docker-compose.yml" \
   "CONTRIBUTING.md" \
   "docs/src/main/sphinx/connector/trino.md" \
-  "docs/delta-smoke.md" \
-  "testing/delta-smoke/docker-compose.yml" \
-  "testing/delta-smoke/run.sh"
+  "docs/remote-delta-smoke.md" \
+  "testing/remote-delta-smoke/docker-compose.yml" \
+  "testing/remote-delta-smoke/run.sh"
 do
   replace_literal "$file" "trinodb/trino:${from_version}" "trinodb/trino:${to_version}"
 

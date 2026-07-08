@@ -6,7 +6,7 @@ DROP SCHEMA IF EXISTS delta.smoke;
 CREATE SCHEMA delta.smoke;
 
 CREATE TABLE delta.smoke.customers
-WITH (location = 's3://delta-smoke/warehouse/smoke/customers') AS
+WITH (location = 's3://remote-delta-smoke/warehouse/smoke/customers') AS
 SELECT *
 FROM (
     VALUES
@@ -17,7 +17,7 @@ FROM (
 
 CREATE TABLE delta.smoke.orders
 WITH (
-    location = 's3://delta-smoke/warehouse/smoke/orders',
+    location = 's3://remote-delta-smoke/warehouse/smoke/orders',
     partitioned_by = ARRAY['ds']
 ) AS
 SELECT *
@@ -30,7 +30,7 @@ FROM (
 ) AS t(orderkey, custkey, totalprice, orderdate, status, ds);
 
 CREATE TABLE delta.smoke.complex_types
-WITH (location = 's3://delta-smoke/warehouse/smoke/complex_types') AS
+WITH (location = 's3://remote-delta-smoke/warehouse/smoke/complex_types') AS
 SELECT
     BIGINT '1' AS id,
     ARRAY['red', 'blue'] AS tags,

@@ -2,10 +2,10 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-compose_file="${repo_root}/testing/delta-smoke/docker-compose.yml"
-project_name="${DELTA_SMOKE_PROJECT_NAME:-trino2trino-delta-smoke}"
+compose_file="${repo_root}/testing/remote-delta-smoke/docker-compose.yml"
+project_name="${REMOTE_DELTA_SMOKE_PROJECT_NAME:-trino2trino-remote-delta-smoke}"
 plugin_dir="${repo_root}/target/trino-trino-482"
-log_dir="${DELTA_SMOKE_LOG_DIR:-${repo_root}/target/delta-smoke}"
+log_dir="${REMOTE_DELTA_SMOKE_LOG_DIR:-${repo_root}/target/remote-delta-smoke}"
 compose_touched=false
 
 compose() {
@@ -23,7 +23,7 @@ capture_logs() {
   mkdir -p "${log_dir}"
   compose ps -a >"${log_dir}/docker-compose-ps-${label}.txt" 2>&1 || true
   compose logs --no-color >"${log_dir}/docker-compose-logs-${label}.txt" 2>&1 || true
-  echo "Delta smoke diagnostics written to ${log_dir}"
+  echo "Remote Delta smoke diagnostics written to ${log_dir}"
 }
 
 finish() {
@@ -32,11 +32,11 @@ finish() {
   if [[ "${compose_touched}" == "true" ]]; then
     if [[ "${exit_code}" -ne 0 ]]; then
       capture_logs failure
-    elif [[ "${DELTA_SMOKE_ALWAYS_LOGS:-false}" == "true" ]]; then
+    elif [[ "${REMOTE_DELTA_SMOKE_ALWAYS_LOGS:-false}" == "true" ]]; then
       capture_logs success
     fi
 
-    if [[ "${DELTA_SMOKE_KEEP_RUNNING:-false}" != "true" ]]; then
+    if [[ "${REMOTE_DELTA_SMOKE_KEEP_RUNNING:-false}" != "true" ]]; then
       compose down -v --remove-orphans >/dev/null 2>&1 || true
     fi
   fi
@@ -66,7 +66,7 @@ trino_exec() {
 wait_for_trino() {
   local service="$1"
   local label="$2"
-  local attempts="${DELTA_SMOKE_WAIT_ATTEMPTS:-90}"
+  local attempts="${REMOTE_DELTA_SMOKE_WAIT_ATTEMPTS:-90}"
 
   for attempt in $(seq 1 "${attempts}"); do
     if trino_exec "${service}" "SELECT 1" >/dev/null 2>&1; then
@@ -126,7 +126,7 @@ assert_query_not_contains() {
   fi
 }
 
-echo "Starting Delta smoke stack"
+echo "Starting remote Delta smoke stack"
 compose_touched=true
 compose down -v --remove-orphans >/dev/null 2>&1 || true
 compose up -d
@@ -138,10 +138,10 @@ echo "Seeding Delta tables on the remote Trino cluster"
 compose exec -T trino-remote-delta trino \
   --server localhost:8080 \
   --user trino \
-  --file /delta-smoke/sql/seed-delta.sql \
+  --file /remote-delta-smoke/sql/seed-delta.sql \
   --output-format TSV
 
-echo "Running local-to-remote Delta smoke assertions"
+echo "Running local-to-remote Delta assertions"
 assert_query_contains "smoke" "SHOW SCHEMAS FROM remote_delta"
 assert_query_contains "orders" "SHOW TABLES FROM remote_delta.smoke"
 assert_query_contains "customers" "SHOW TABLES FROM remote_delta.smoke"
@@ -164,4 +164,4 @@ assert_query_contains "remote_delta:Query[" "${regexp_filter_plan_sql}"
 assert_query_not_contains "ScanFilterProject" "${regexp_filter_plan_sql}"
 assert_query_contains "remote_delta:Query[" "EXPLAIN SELECT o.orderkey, c.name FROM remote_delta.smoke.orders o JOIN remote_delta.smoke.customers c ON o.custkey = c.custkey"
 
-echo "Delta smoke test passed"
+echo "Remote Delta smoke test passed"

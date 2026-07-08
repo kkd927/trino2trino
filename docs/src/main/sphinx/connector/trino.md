@@ -312,8 +312,8 @@ The test suite is centered on the generic contract exposed by remote Trino:
 - statistics
 - federation behavior
 
-The default ``Build and Test`` CI workflow also runs a Docker-based Delta Lake
+The default ``Build and Test`` CI workflow also runs a Docker-based remote Delta
 smoke test for the production shape where a small federated Trino 482 cluster
 queries a separate Trino 482 cluster with a Delta Lake catalog. It reuses the
 ``target/trino-trino-482`` package produced by ``mvn -B clean verify`` and is
-documented in ``docs/delta-smoke.md``.
+documented in ``docs/remote-delta-smoke.md``.

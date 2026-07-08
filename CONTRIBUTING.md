@@ -59,12 +59,13 @@ To run the same smoke test locally:
 
 ```bash
 mvn -B clean verify
-testing/delta-smoke/run.sh
+testing/remote-delta-smoke/run.sh
 ```
 
-This starts local and remote Trino containers, MinIO, and Hive Metastore.
-Failure diagnostics are written to `target/delta-smoke/`. See
-`docs/delta-smoke.md` for details.
+This starts local and remote Trino containers, MinIO, and Hive Metastore for
+the remote Delta smoke test.
+Failure diagnostics are written to `target/remote-delta-smoke/`. See
+`docs/remote-delta-smoke.md` for details.
 
 ## Documentation
 

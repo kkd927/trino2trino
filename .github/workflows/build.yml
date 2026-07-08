@@ -52,8 +52,8 @@ jobs:
       - name: Build and test
         run: mvn -B clean verify
 
-      - name: Run Delta smoke test
-        run: testing/delta-smoke/run.sh
+      - name: Run remote Delta smoke
+        run: testing/remote-delta-smoke/run.sh
 
       - name: Upload test reports
         if: failure()
@@ -63,5 +63,5 @@ jobs:
           path: |
             target/surefire-reports/**
             target/failsafe-reports/**
-            target/delta-smoke/**
+            target/remote-delta-smoke/**
           if-no-files-found: ignore

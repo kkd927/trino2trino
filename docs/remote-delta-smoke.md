@@ -1,10 +1,10 @@
-# Delta Lake remote-catalog smoke test
+# Remote Delta smoke test
 
 This repository's default test suite validates the generic Trino-to-Trino
 contract with in-process Trino 482 query runners.
 
-The default `Build and Test` CI workflow also runs the Docker-based Delta smoke
-test on `push`, `pull_request`, and `workflow_dispatch` after
+The default `Build and Test` CI workflow also runs the Docker-based remote
+Delta smoke test on `push`, `pull_request`, and `workflow_dispatch` after
 `mvn -B clean verify`. It validates the common production shape where a small
 federated Trino 482 cluster queries a separate Trino 482 cluster whose remote
 catalog is backed by Delta Lake.
@@ -48,21 +48,21 @@ mvn -B clean verify
 Run the smoke test:
 
 ```bash
-testing/delta-smoke/run.sh
+testing/remote-delta-smoke/run.sh
 ```
 
 The script tears down the Docker Compose stack by default. Keep the stack
 running for inspection with:
 
 ```bash
-DELTA_SMOKE_KEEP_RUNNING=true testing/delta-smoke/run.sh
+REMOTE_DELTA_SMOKE_KEEP_RUNNING=true testing/remote-delta-smoke/run.sh
 ```
 
 On failure, the script writes Docker Compose status and container logs under
-`target/delta-smoke/`. To keep those diagnostics after a successful run too:
+`target/remote-delta-smoke/`. To keep those diagnostics after a successful run too:
 
 ```bash
-DELTA_SMOKE_ALWAYS_LOGS=true testing/delta-smoke/run.sh
+REMOTE_DELTA_SMOKE_ALWAYS_LOGS=true testing/remote-delta-smoke/run.sh
 ```
 
 Useful endpoints while the stack is running:

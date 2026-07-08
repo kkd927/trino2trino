@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-compose_file="${repo_root}/testing/basic-remote-smoke/docker-compose.yml"
+compose_file="${repo_root}/testing/remote-version-smoke/docker-compose.yml"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -30,7 +30,7 @@ remote_versions=("$@")
 if [[ "${#remote_versions[@]}" -eq 0 && -n "${REMOTE_TRINO_VERSION:-}" ]]; then
   remote_versions=("${REMOTE_TRINO_VERSION}")
 fi
-[[ "${#remote_versions[@]}" -gt 0 ]] || fail "usage: testing/basic-remote-smoke/run.sh REMOTE_VERSION [REMOTE_VERSION ...]"
+[[ "${#remote_versions[@]}" -gt 0 ]] || fail "usage: testing/remote-version-smoke/run.sh REMOTE_VERSION [REMOTE_VERSION ...]"
 
 plugin_dir="${repo_root}/target/trino-trino-${local_version}"
 if [[ ! -d "${plugin_dir}" ]]; then
@@ -47,8 +47,8 @@ run_version() (
   set -euo pipefail
 
   local remote_version="$1"
-  local project_name="${BASIC_REMOTE_SMOKE_PROJECT_NAME:-trino2trino-basic-remote-${local_version}-to-${remote_version}}"
-  local log_base="${BASIC_REMOTE_SMOKE_LOG_BASE:-${repo_root}/target/basic-remote-smoke}"
+  local project_name="${REMOTE_VERSION_SMOKE_PROJECT_NAME:-trino2trino-remote-version-${local_version}-to-${remote_version}}"
+  local log_base="${REMOTE_VERSION_SMOKE_LOG_BASE:-${repo_root}/target/remote-version-smoke}"
   local log_dir="${log_base}/${local_version}-to-${remote_version}"
   local compose_touched=false
 
@@ -68,7 +68,7 @@ run_version() (
     mkdir -p "${log_dir}"
     compose ps -a >"${log_dir}/docker-compose-ps-${label}.txt" 2>&1 || true
     compose logs --no-color >"${log_dir}/docker-compose-logs-${label}.txt" 2>&1 || true
-    echo "Basic remote smoke diagnostics written to ${log_dir}"
+    echo "Remote version smoke diagnostics written to ${log_dir}"
   }
 
   finish() {
@@ -77,11 +77,11 @@ run_version() (
     if [[ "${compose_touched}" == "true" ]]; then
       if [[ "${exit_code}" -ne 0 ]]; then
         capture_logs failure
-      elif [[ "${BASIC_REMOTE_SMOKE_ALWAYS_LOGS:-false}" == "true" ]]; then
+      elif [[ "${REMOTE_VERSION_SMOKE_ALWAYS_LOGS:-false}" == "true" ]]; then
         capture_logs success
       fi
 
-      if [[ "${BASIC_REMOTE_SMOKE_KEEP_RUNNING:-false}" != "true" ]]; then
+      if [[ "${REMOTE_VERSION_SMOKE_KEEP_RUNNING:-false}" != "true" ]]; then
         compose down -v --remove-orphans >/dev/null 2>&1 || true
       fi
     fi
@@ -106,7 +106,7 @@ run_version() (
   wait_for_trino() {
     local service="$1"
     local label="$2"
-    local attempts="${BASIC_REMOTE_SMOKE_WAIT_ATTEMPTS:-90}"
+    local attempts="${REMOTE_VERSION_SMOKE_WAIT_ATTEMPTS:-90}"
 
     for attempt in $(seq 1 "${attempts}"); do
       if trino_exec "${service}" "SELECT 1" >/dev/null 2>&1; then
@@ -127,7 +127,7 @@ run_version() (
     local sql="$2"
     local actual
 
-    actual="$(trino_exec trino-local-basic "${sql}")"
+    actual="$(trino_exec trino-local-version "${sql}")"
     if [[ "${actual}" != "${expected}" ]]; then
       echo "Assertion failed"
       echo "SQL: ${sql}"
@@ -142,7 +142,7 @@ run_version() (
     local sql="$2"
     local actual
 
-    actual="$(trino_exec trino-local-basic "${sql}")"
+    actual="$(trino_exec trino-local-version "${sql}")"
     if [[ "${actual}" != *"${needle}"* ]]; then
       echo "Assertion failed"
       echo "SQL: ${sql}"
@@ -153,13 +153,13 @@ run_version() (
     fi
   }
 
-  echo "Starting basic remote smoke stack for local Trino ${local_version} -> remote Trino ${remote_version}"
+  echo "Starting remote version smoke stack for local Trino ${local_version} -> remote Trino ${remote_version}"
   compose_touched=true
   compose down -v --remove-orphans >/dev/null 2>&1 || true
   compose up -d
 
-  wait_for_trino trino-remote-basic "remote Trino ${remote_version}"
-  wait_for_trino trino-local-basic "local Trino ${local_version}"
+  wait_for_trino trino-remote-version "remote Trino ${remote_version}"
+  wait_for_trino trino-local-version "local Trino ${local_version}"
 
   echo "Running TPCH remote federation assertions"
   assert_query_contains "tiny" "SHOW SCHEMAS FROM remote_tpch"
@@ -177,18 +177,18 @@ run_version() (
   assert_query_equals "25" "SELECT * FROM TABLE(remote_tpch.system.query(query => 'SELECT count(*) FROM tpch.tiny.nation'))"
 
   echo "Running CHAR/VARCHAR remote delegation assertions"
-  trino_exec trino-remote-basic "DROP TABLE IF EXISTS memory.default.basic_char_probe" >/dev/null
-  trino_exec trino-remote-basic "CREATE TABLE memory.default.basic_char_probe AS SELECT * FROM (VALUES (1, CAST('a' AS CHAR(3)), VARCHAR 'a'), (2, CAST('a' AS CHAR(3)), VARCHAR 'a  '), (3, CAST('b' AS CHAR(3)), VARCHAR 'b  ')) AS t(id, c, v)" >/dev/null
-  assert_query_equals $'[a]\t1' "SELECT '[' || CAST(c AS VARCHAR) || ']', length(CAST(c AS VARCHAR)) FROM remote_memory.default.basic_char_probe WHERE id = 1"
-  assert_query_equals "1" "SELECT id FROM remote_memory.default.basic_char_probe WHERE v = c ORDER BY id"
-  assert_query_equals $'1\n2' "SELECT id FROM remote_memory.default.basic_char_probe WHERE c = CAST('a' AS CHAR(3)) ORDER BY id"
-  assert_query_equals "1" "SELECT id FROM remote_memory.default.basic_char_probe WHERE v = CAST('a' AS CHAR(3)) ORDER BY id"
+  trino_exec trino-remote-version "DROP TABLE IF EXISTS memory.default.remote_version_char_probe" >/dev/null
+  trino_exec trino-remote-version "CREATE TABLE memory.default.remote_version_char_probe AS SELECT * FROM (VALUES (1, CAST('a' AS CHAR(3)), VARCHAR 'a'), (2, CAST('a' AS CHAR(3)), VARCHAR 'a  '), (3, CAST('b' AS CHAR(3)), VARCHAR 'b  ')) AS t(id, c, v)" >/dev/null
+  assert_query_equals $'[a]\t1' "SELECT '[' || CAST(c AS VARCHAR) || ']', length(CAST(c AS VARCHAR)) FROM remote_memory.default.remote_version_char_probe WHERE id = 1"
+  assert_query_equals "1" "SELECT id FROM remote_memory.default.remote_version_char_probe WHERE v = c ORDER BY id"
+  assert_query_equals $'1\n2' "SELECT id FROM remote_memory.default.remote_version_char_probe WHERE c = CAST('a' AS CHAR(3)) ORDER BY id"
+  assert_query_equals "1" "SELECT id FROM remote_memory.default.remote_version_char_probe WHERE v = CAST('a' AS CHAR(3)) ORDER BY id"
   if [[ "${remote_version}" -lt 482 ]]; then
-    assert_query_contains "trim(TRAILING ' ' FROM" "EXPLAIN SELECT '[' || CAST(c AS VARCHAR) || ']', length(CAST(c AS VARCHAR)) FROM remote_memory.default.basic_char_probe WHERE id = 1"
-    assert_query_contains "trim(TRAILING ' ' FROM" "EXPLAIN SELECT id FROM remote_memory.default.basic_char_probe WHERE v = c ORDER BY id"
+    assert_query_contains "trim(TRAILING ' ' FROM" "EXPLAIN SELECT '[' || CAST(c AS VARCHAR) || ']', length(CAST(c AS VARCHAR)) FROM remote_memory.default.remote_version_char_probe WHERE id = 1"
+    assert_query_contains "trim(TRAILING ' ' FROM" "EXPLAIN SELECT id FROM remote_memory.default.remote_version_char_probe WHERE v = c ORDER BY id"
   fi
 
-  echo "Basic remote smoke test passed for local Trino ${local_version} -> remote Trino ${remote_version}"
+  echo "Remote version smoke test passed for local Trino ${local_version} -> remote Trino ${remote_version}"
 )
 
 failures=0
@@ -204,6 +204,6 @@ for remote_version in "${remote_versions[@]}"; do
 done
 
 if [[ "${failures}" -ne 0 ]]; then
-  echo "${failures} basic remote smoke probe(s) failed"
+  echo "${failures} remote version smoke probe(s) failed"
   exit 1
 fi
