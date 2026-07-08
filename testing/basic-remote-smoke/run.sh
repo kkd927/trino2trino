@@ -176,6 +176,18 @@ run_version() (
   assert_query_equals "2" "SELECT count(*) FROM (VALUES BIGINT '1', BIGINT '3') AS local_keys(nationkey) JOIN remote_tpch.tiny.nation n ON n.nationkey = local_keys.nationkey"
   assert_query_equals "25" "SELECT * FROM TABLE(remote_tpch.system.query(query => 'SELECT count(*) FROM tpch.tiny.nation'))"
 
+  echo "Running CHAR/VARCHAR remote delegation assertions"
+  trino_exec trino-remote-basic "DROP TABLE IF EXISTS memory.default.basic_char_probe" >/dev/null
+  trino_exec trino-remote-basic "CREATE TABLE memory.default.basic_char_probe AS SELECT * FROM (VALUES (1, CAST('a' AS CHAR(3)), VARCHAR 'a'), (2, CAST('a' AS CHAR(3)), VARCHAR 'a  '), (3, CAST('b' AS CHAR(3)), VARCHAR 'b  ')) AS t(id, c, v)" >/dev/null
+  assert_query_equals $'[a]\t1' "SELECT '[' || CAST(c AS VARCHAR) || ']', length(CAST(c AS VARCHAR)) FROM remote_memory.default.basic_char_probe WHERE id = 1"
+  assert_query_equals "1" "SELECT id FROM remote_memory.default.basic_char_probe WHERE v = c ORDER BY id"
+  assert_query_equals $'1\n2' "SELECT id FROM remote_memory.default.basic_char_probe WHERE c = CAST('a' AS CHAR(3)) ORDER BY id"
+  assert_query_equals "1" "SELECT id FROM remote_memory.default.basic_char_probe WHERE v = CAST('a' AS CHAR(3)) ORDER BY id"
+  if [[ "${remote_version}" -lt 482 ]]; then
+    assert_query_contains "trim(TRAILING ' ' FROM" "EXPLAIN SELECT '[' || CAST(c AS VARCHAR) || ']', length(CAST(c AS VARCHAR)) FROM remote_memory.default.basic_char_probe WHERE id = 1"
+    assert_query_contains "trim(TRAILING ' ' FROM" "EXPLAIN SELECT id FROM remote_memory.default.basic_char_probe WHERE v = c ORDER BY id"
+  fi
+
   echo "Basic remote smoke test passed for local Trino ${local_version} -> remote Trino ${remote_version}"
 )
 

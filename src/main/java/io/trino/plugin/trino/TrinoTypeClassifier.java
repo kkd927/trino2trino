@@ -143,17 +143,17 @@ final class TrinoTypeClassifier
 
     static boolean isJsonType(Type type)
     {
-        return type.getTypeSignature().getBase().equals("json");
+        return type.getBaseName().equals("json");
     }
 
     static boolean isIpAddressType(Type type)
     {
-        return type.getTypeSignature().getBase().equals("ipaddress");
+        return type.getBaseName().equals("ipaddress");
     }
 
     static boolean isNumberType(Type type)
     {
-        return type.getTypeSignature().getBase().equals(NumberType.NAME);
+        return type.getBaseName().equals(NumberType.NAME);
     }
 
     static TransportKind transportKind(Type type)
@@ -172,7 +172,7 @@ final class TrinoTypeClassifier
 
     private static SketchTransportKind sketchTransportKind(Type type)
     {
-        String typeBase = type.getTypeSignature().getBase();
+        String typeBase = type.getBaseName();
         if (typeBase.equalsIgnoreCase("HyperLogLog") ||
                 typeBase.equalsIgnoreCase("P4HyperLogLog") ||
                 typeBase.equalsIgnoreCase("qdigest") ||

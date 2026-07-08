@@ -42,6 +42,7 @@ import java.util.Set;
 
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
+import static io.trino.spi.type.CharType.createCharType;
 import static io.trino.spi.type.NumberType.NUMBER;
 import static io.trino.spi.type.TimestampType.TIMESTAMP_MILLIS;
 import static io.trino.spi.type.VarcharType.VARCHAR;
@@ -65,6 +66,13 @@ class TestTrinoRemoteSqlRenderer
             Types.VARCHAR,
             Optional.of("varchar"),
             Optional.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty());
+    private static final JdbcTypeHandle CHAR3_TYPE_HANDLE = new JdbcTypeHandle(
+            Types.CHAR,
+            Optional.of("char(3)"),
+            Optional.of(3),
             Optional.empty(),
             Optional.empty(),
             Optional.empty());
@@ -94,6 +102,81 @@ class TestTrinoRemoteSqlRenderer
         assertThat(rewritten.parameters()).hasSize(1);
         assertThat(rewritten.parameters().getFirst().getType()).isEqualTo(TIMESTAMP_MILLIS);
         assertThat(rewritten.parameters().getFirst().getValue()).contains(0L);
+    }
+
+    @Test
+    void testCharToVarcharCastUsesRemoteSemanticsProbe()
+    {
+        ConnectorExpression cast = new Call(
+                VARCHAR,
+                StandardFunctions.CAST_FUNCTION_NAME,
+                List.of(new Variable("c", createCharType(3))));
+        Map<String, ColumnHandle> assignments = Map.of("c", column("c", CHAR3_TYPE_HANDLE, createCharType(3)));
+
+        assertThat(render(cast, assignments).expression())
+                .isEqualTo("CAST(\"c\" AS varchar)");
+
+        ParameterizedExpression legacy = render(
+                cast,
+                assignments,
+                TrinoRemoteCapabilities.forTestingLegacyCharToVarcharCast(Set.of()));
+        assertThat(legacy.expression())
+                .isEqualTo("CAST(trim(TRAILING ' ' FROM \"c\") AS varchar)");
+
+        assertThat(renderer.renderExpression(
+                SESSION,
+                cast,
+                assignments,
+                new TrinoRemoteCapabilities(Optional.of("unknown"), Optional.of(Set.of()), Optional.of("UTC"), Optional.empty())))
+                .isEmpty();
+    }
+
+    @Test
+    void testLegacyCharToVarcharCastIsCorrectedInsideNestedExpression()
+    {
+        ConnectorExpression expression = new Call(
+                VARCHAR,
+                new FunctionName("concat"),
+                List.of(
+                        new Call(
+                                VARCHAR,
+                                StandardFunctions.CAST_FUNCTION_NAME,
+                                List.of(new Variable("c", createCharType(3)))),
+                        varcharConstant("-suffix")));
+
+        ParameterizedExpression rewritten = render(
+                expression,
+                Map.of("c", column("c", CHAR3_TYPE_HANDLE, createCharType(3))),
+                TrinoRemoteCapabilities.forTestingLegacyCharToVarcharCast(Set.of("concat")));
+
+        assertThat(rewritten.expression())
+                .isEqualTo("concat(CAST(trim(TRAILING ' ' FROM \"c\") AS varchar), ?)");
+        assertThat(rewritten.parameters()).hasSize(1);
+    }
+
+    @Test
+    void testLegacyCharToVarcharCastIsCorrectedInsidePredicate()
+    {
+        ConnectorExpression expression = new Call(
+                BOOLEAN,
+                StandardFunctions.EQUAL_OPERATOR_FUNCTION_NAME,
+                List.of(
+                        new Call(
+                                VARCHAR,
+                                StandardFunctions.CAST_FUNCTION_NAME,
+                                List.of(new Variable("c", createCharType(3)))),
+                        new Variable("v", VARCHAR)));
+
+        ParameterizedExpression rewritten = render(
+                expression,
+                Map.of(
+                        "c", column("c", CHAR3_TYPE_HANDLE, createCharType(3)),
+                        "v", column("v", VARCHAR_TYPE_HANDLE, VARCHAR)),
+                TrinoRemoteCapabilities.forTestingLegacyCharToVarcharCast(Set.of()));
+
+        assertThat(rewritten.expression())
+                .isEqualTo("(CAST(trim(TRAILING ' ' FROM \"c\") AS varchar) = \"v\")");
+        assertThat(rewritten.parameters()).isEmpty();
     }
 
     @Test
@@ -244,6 +327,14 @@ class TestTrinoRemoteSqlRenderer
     }
 
     private ParameterizedExpression render(ConnectorExpression expression, Map<String, ? extends ColumnHandle> assignments)
+    {
+        return render(expression, assignments, capabilities);
+    }
+
+    private ParameterizedExpression render(
+            ConnectorExpression expression,
+            Map<String, ? extends ColumnHandle> assignments,
+            TrinoRemoteCapabilities capabilities)
     {
         return renderer.renderExpression(SESSION, expression, Map.copyOf(assignments), capabilities)
                 .orElseThrow(() -> new AssertionError("Expected expression to be rendered: " + expression));

@@ -48,7 +48,7 @@ services:
       - "19083:9083"
 
   trino-remote-delta:
-    image: trinodb/trino:481
+    image: trinodb/trino:482
     depends_on:
       hive-metastore:
         condition: service_started
@@ -61,11 +61,11 @@ services:
       - "19080:8080"
 
   trino-local-delta:
-    image: trinodb/trino:481
+    image: trinodb/trino:482
     depends_on:
       - trino-remote-delta
     volumes:
-      - ../../target/trino-trino-481:/usr/lib/trino/plugin/trino:ro
+      - ../../target/trino-trino-482:/usr/lib/trino/plugin/trino:ro
       - ./conf/local/catalog:/etc/trino/catalog:ro
       - ./sql:/delta-smoke/sql:ro
     ports:

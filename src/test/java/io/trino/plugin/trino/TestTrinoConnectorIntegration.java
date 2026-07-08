@@ -687,7 +687,7 @@ public class TestTrinoConnectorIntegration
                 """
                 SELECT regexp_extract(path, '/post/([0-9]+)', 1)
                 FROM remote.default.test_delegation_log
-                WHERE date_trunc('day', CAST(log_timestamp AS timestamp)) = TIMESTAMP '2024-01-15 00:00:00'
+                WHERE date_format(CAST(log_timestamp AS timestamp), '%Y-%m-%d') = '2024-01-15'
                     AND regexp_like(path, '^/post/')
                 ORDER BY 1
                 """;
@@ -696,6 +696,47 @@ public class TestTrinoConnectorIntegration
         assertThat(result.getOnlyColumnAsSet()).containsExactly("100", "200");
 
         String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
+        assertThat(explain).doesNotContain("ScanFilterProject");
+    }
+
+    @Test
+    void testDateTruncProjectionRemoteDelegation()
+    {
+        String sql =
+                """
+                SELECT CAST(date_trunc('day', CAST(log_timestamp AS timestamp)) AS VARCHAR)
+                FROM remote.default.test_delegation_log
+                WHERE regexp_like(path, '^/post/')
+                ORDER BY 1
+                """;
+
+        MaterializedResult result = computeActual(sql);
+        assertThat(result.getMaterializedRows())
+                .extracting(row -> row.getField(0))
+                .containsExactly("2024-01-15 00:00:00.000", "2024-01-15 00:00:00.000");
+
+        String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
+        assertThat(explain).contains("remote:Query[");
+        assertThat(explain).contains("date_trunc");
+        assertThat(explain).doesNotContain("ScanFilterProject");
+    }
+
+    @Test
+    void testCharVarcharPredicateRemoteDelegation()
+    {
+        String sql =
+                """
+                SELECT id
+                FROM remote.default.test_char_varchar_predicate
+                WHERE v = c
+                ORDER BY id
+                """;
+
+        MaterializedResult result = computeActual(sql);
+        assertThat(result.getOnlyColumnAsSet()).containsExactly(1);
+
+        String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
+        assertThat(explain).contains("constraints=[ParameterizedExpression[expression=(CAST(\"c\" AS varchar) = \"v\")");
         assertThat(explain).doesNotContain("ScanFilterProject");
     }
 

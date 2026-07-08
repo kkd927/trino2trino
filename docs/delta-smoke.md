@@ -1,21 +1,21 @@
 # Delta Lake remote-catalog smoke test
 
 This repository's default test suite validates the generic Trino-to-Trino
-contract with in-process Trino 481 query runners.
+contract with in-process Trino 482 query runners.
 
 The default `Build and Test` CI workflow also runs the Docker-based Delta smoke
 test on `push`, `pull_request`, and `workflow_dispatch` after
 `mvn -B clean verify`. It validates the common production shape where a small
-federated Trino 481 cluster queries a separate Trino 481 cluster whose remote
+federated Trino 482 cluster queries a separate Trino 482 cluster whose remote
 catalog is backed by Delta Lake.
 
 ## Scope
 
 The smoke test starts:
 
-- `trino-local-delta`: Trino 481 with the `trino2trino` plugin mounted from
-  `target/trino-trino-481`
-- `trino-remote-delta`: Trino 481 with a native `delta_lake` catalog
+- `trino-local-delta`: Trino 482 with the `trino2trino` plugin mounted from
+  `target/trino-trino-482`
+- `trino-remote-delta`: Trino 482 with a native `delta_lake` catalog
 - MinIO as S3-compatible object storage
 - Apache Hive Metastore with an embedded Derby backend and Hadoop S3A support
   for validating Delta table locations stored in MinIO
@@ -82,4 +82,4 @@ Useful endpoints while the stack is running:
   metastore backend.
 - The Delta catalog uses MinIO credentials intended only for local testing.
 - The default CI path runs this smoke test after `mvn -B clean verify` and uses
-  the `target/trino-trino-481` package created by that build.
+  the `target/trino-trino-482` package created by that build.

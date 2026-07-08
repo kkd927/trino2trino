@@ -2,7 +2,7 @@
 
 [![Build and Test](https://github.com/kkd927/trino2trino/actions/workflows/build.yml/badge.svg)](https://github.com/kkd927/trino2trino/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Trino](https://img.shields.io/badge/Trino-481-blue)
+![Trino](https://img.shields.io/badge/Trino-482-blue)
 
 A read-only [Trino](https://trino.io/) connector that queries a remote Trino cluster via JDBC.
 
@@ -31,8 +31,8 @@ Choose the release matching your local Trino version from the
 into the Trino plugin directory:
 
 ```bash
-# Example for Trino 481
-unzip trino-trino-481.zip -d /usr/lib/trino/plugin/trino/
+# Example for Trino 482
+unzip trino-trino-482.zip -d /usr/lib/trino/plugin/trino/
 ```
 
 ### 2. Configure
@@ -157,9 +157,11 @@ FROM TABLE(
   `current_date`, current time zone functions, `from_iso8601_timestamp`, and
   casts that add or remove a session time zone are not delegated unless their
   semantics are represented by explicit, compatible SQL expressions.
+- Remote delegation probes `CHAR` to `VARCHAR` cast semantics and trims legacy
+  remote padding when such casts are pushed down.
 - Negative dates (before year 0001) are not preserved correctly through JDBC
 - Cross-cluster joins can only be improved with pushdown and statistics; the connector cannot remove the structural cost of federating between clusters
-- Tested against Trino 481 querying remote Trino 481; cross-version compatibility is not claimed yet
+- Tested against Trino 482 querying remote Trino 482; cross-version compatibility is not claimed yet
 
 ## Contributing
 

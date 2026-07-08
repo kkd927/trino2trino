@@ -478,7 +478,7 @@ class TestTrinoTypeMapping
     void testCharType()
     {
         MaterializedResult result = computeActual("SELECT CAST(x AS VARCHAR), length(x) FROM remote.default.test_char");
-        assertThat(result.getMaterializedRows().get(0).getField(0)).isEqualTo("abc       ");
+        assertThat(result.getMaterializedRows().get(0).getField(0)).isEqualTo("abc");
         assertThat(result.getMaterializedRows().get(0).getField(1)).isEqualTo(10L);
     }
 
@@ -491,7 +491,7 @@ class TestTrinoTypeMapping
                 FROM remote.default.test_array_char
                 CROSS JOIN UNNEST(x) AS t(e)
                 """);
-        assertThat(result.getMaterializedRows().get(0).getField(0)).isEqualTo("abc       ");
+        assertThat(result.getMaterializedRows().get(0).getField(0)).isEqualTo("abc");
         assertThat(result.getMaterializedRows().get(0).getField(1)).isEqualTo(10L);
     }
 

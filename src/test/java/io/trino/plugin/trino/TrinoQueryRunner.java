@@ -441,6 +441,16 @@ public final class TrinoQueryRunner
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_array_char AS SELECT ARRAY[CAST('abc' AS CHAR(10))] AS x");
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_char_varchar_predicate AS
+                SELECT * FROM (
+                    VALUES
+                        (1, CAST('a' AS CHAR(3)), VARCHAR 'a'),
+                        (2, CAST('a' AS CHAR(3)), VARCHAR 'a  '),
+                        (3, CAST('b' AS CHAR(3)), VARCHAR 'b  ')
+                ) AS t(id, c, v)
+                """);
 
         // --- VARBINARY type ---
         remoteRunner.execute(
