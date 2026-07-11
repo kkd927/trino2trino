@@ -97,7 +97,9 @@ Native scalar reads include:
 - ``uuid``, ``json``, ``ipaddress``
 
 Native complex reads are allowed only when every descendant leaf is natively
-readable.
+readable. Date leaves, fractional ``time(p>0)`` leaves, and timestamp leaves at
+every precision use JSON transport because the JDBC complex-value
+representation cannot preserve them exactly.
 
 Examples:
 
@@ -128,6 +130,8 @@ original logical type locally.
 Examples:
 
 - ``array(timestamp(12))``
+- ``array(time(3))``
+- ``array(date)``
 - ``map(varchar, interval day to second)``
 - ``row(ts timestamp(12), attrs map(varchar, varchar))``
 
@@ -160,7 +164,7 @@ have a safe recursive transport contract.
 
 ## Query passthrough
 
-Execute manual row-returning read SQL on the remote Trino:
+Execute a manual top-level query statement on the remote Trino:
 
 ```sql
 SELECT *
@@ -173,13 +177,14 @@ FROM TABLE(
 
 ``system.query`` is an explicit bypass for the normal connector planning path:
 
-- the inner SQL string is sent to remote Trino as written
+- the inner SQL is sent without expression rewriting; the connector can strip
+  a trailing semicolon and wrap the query to assign stable output aliases
 - the connector still infers output columns and applies the normal type
   mapping and transport rules to the result
-- only top-level row-returning queries (``SELECT``, ``WITH``, ``VALUES``,
-  ``TABLE``) are accepted; Trino performs no further validation or security
-  checks on passthrough SQL, and the execution boundary is remote access
-  control
+- only top-level query statements (``SELECT``, ``WITH``, ``VALUES``, ``TABLE``)
+  are accepted; this syntactic check does not prove that invoked functions or
+  table functions are free of side effects, so remote access control and
+  read-only credentials are the execution boundary
 - while normal table access maps 1:1 to the configured remote catalog,
   passthrough SQL is an explicit escape hatch from that mapping
 - remote query preparation and execution failures are returned directly;
@@ -236,7 +241,7 @@ The connector supports:
   logic, arithmetic, ``LIKE``, ``IN``, regexp, JSON, date/time functions,
   dereference, subscript, and aggregation expressions
 - ``LIMIT`` pushdown
-- ``ORDER BY ... LIMIT`` pushdown
+- partial ``ORDER BY ... LIMIT`` pushdown with local ordering verification
 - aggregation pushdown for ``count``, ``count distinct``, ``count_if``,
   ``checksum``, ``min/max``, ``sum``, and ``avg`` on supported types
 - same-remote join pushdown for supported join shapes
@@ -252,7 +257,8 @@ Pushdown behavior for transport-backed columns is split:
 - scalar ``VARCHAR`` transport (``timestamp(p>9)``,
   ``timestamp(p) with time zone``, ``time with time zone``, interval types)
   keeps tuple-domain predicate pushdown enabled via typed bind expressions such
-  as ``CAST(? AS timestamp(12))`` or ``parse_duration(?)``
+  as ``CAST(? AS timestamp(12))`` or
+  ``INTERVAL '0.001' SECOND * CAST(? AS BIGINT)``
 - structural ``JSON`` transport remains ``DISABLE_PUSHDOWN``
 - sketch ``VARBINARY`` transport remains ``DISABLE_PUSHDOWN``
 
@@ -285,22 +291,22 @@ Not supported:
 
 Session-sensitive functions and casts such as ``current_timestamp``,
 ``current_date``, ``current_time``, current time zone functions,
-``from_iso8601_timestamp``, and casts that add or remove a session time zone
-are not delegated. Expressions with explicit time zone operands, such as
-``AT TIME ZONE 'Asia/Seoul'``, can be delegated when the rendered SQL is
-otherwise compatible.
+locale-sensitive date formatting, and casts that depend on the session start
+date are evaluated locally. Time-zone-dependent expressions such as
+``from_iso8601_timestamp`` are delegated only when local and remote time zones
+match. Expressions with explicit time zone operands, such as ``AT TIME ZONE
+'Asia/Seoul'``, can be delegated when the rendered SQL is otherwise compatible.
 
 ## Limitations
 
 - Standard table access and metadata operations are read-only
-- ``system.query`` supports only row-returning read queries; statement-level
-  writes (DDL, DML, ``CALL``) are rejected before remote execution, and no
-  further validation is performed on passthrough SQL
+- ``system.query`` accepts only top-level query statements; top-level writes
+  (DDL, DML, ``CALL``) are rejected before remote execution, while functions
+  and table functions remain governed by remote access control
 - ``CALL system.execute(...)`` is inherited from the base JDBC framework but
   is denied by this connector's read-only access control
 - Remote delegation probes ``CHAR`` to ``VARCHAR`` cast semantics and trims
   legacy remote padding when such casts are pushed down
-- Negative dates (before year 0001) are not preserved correctly through JDBC
 - Cross-cluster joins can only be improved with pushdown and statistics; the
   connector cannot remove the structural cost of federating between clusters
 - Cross-version compatibility is not yet claimed

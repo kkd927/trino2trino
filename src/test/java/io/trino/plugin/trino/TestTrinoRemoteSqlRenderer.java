@@ -132,6 +132,37 @@ class TestTrinoRemoteSqlRenderer
     }
 
     @Test
+    void testNestedCharToVarcharCastRequiresRemoteTrimmingSemantics()
+    {
+        ArrayType sourceType = new ArrayType(createCharType(3));
+        ArrayType targetType = new ArrayType(VARCHAR);
+        ConnectorExpression cast = new Call(
+                targetType,
+                StandardFunctions.CAST_FUNCTION_NAME,
+                List.of(new Variable("values", sourceType)));
+        Map<String, ColumnHandle> assignments = Map.of(
+                "values", column(
+                        "values",
+                        new JdbcTypeHandle(Types.ARRAY, Optional.of("array(char(3))"), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty()),
+                        sourceType));
+
+        assertThat(render(cast, assignments).expression())
+                .isEqualTo("CAST(\"values\" AS array(varchar))");
+        assertThat(renderer.renderExpression(
+                SESSION,
+                cast,
+                assignments,
+                TrinoRemoteCapabilities.forTestingLegacyCharToVarcharCast(Set.of())))
+                .isEmpty();
+        assertThat(renderer.renderExpression(
+                SESSION,
+                cast,
+                assignments,
+                TrinoRemoteCapabilities.unavailable()))
+                .isEmpty();
+    }
+
+    @Test
     void testLegacyCharToVarcharCastIsCorrectedInsideNestedExpression()
     {
         ConnectorExpression expression = new Call(

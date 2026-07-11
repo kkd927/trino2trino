@@ -220,7 +220,7 @@ final class JdbcComplexValueCodec
                 epochDay = localDate.toEpochDay();
             }
             else {
-                epochDay = LocalDate.parse(value.toString()).toEpochDay();
+                epochDay = TemporalTransportCodec.parseDate(value.toString()).toEpochDay();
             }
             type.writeLong(builder, epochDay);
             return;

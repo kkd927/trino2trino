@@ -73,9 +73,9 @@ SELECT * FROM remote.schema.table LIMIT 10;
 | Predicate pushdown | Partial | Native columns and typed VARCHAR-transport temporal/interval columns only; JSON/VARBINARY transport columns are excluded |
 | Projection pushdown | Yes | Trino-native expressions are delegated when the compatibility registry allows them |
 | Aggregation pushdown | Partial | `count`, `count distinct`, `count_if`, `checksum`, `min/max`, `sum`, `avg` are pushed down for supported types; `stddev`, `variance`, `covariance`, `correlation`, `regression` are not |
-| `LIMIT` / `ORDER BY ... LIMIT` | Yes | |
+| `LIMIT` / `ORDER BY ... LIMIT` | Yes | Remote TopN reduces transferred rows; local TopN verifies ordering because transport projection can wrap the remote query |
 | Same-remote join pushdown | Partial | All comparison operators are supported, including `IS NOT DISTINCT FROM` and varchar inequalities; joins stay local when the cost-based strategy declines or a constant join condition is not an exact numeric or varchar |
-| `TABLE(system.query(...))` passthrough | Yes | Row-returning read queries only |
+| `TABLE(system.query(...))` passthrough | Yes | Top-level query statements only; remote access control is the security boundary |
 | Table statistics (`SHOW STATS`) | Yes | Uses remote `SHOW STATS FOR <table>` |
 | `INSERT` / `UPDATE` / `DELETE` / `MERGE` | No | Read-only connector |
 | `CREATE` / `ALTER` / `DROP` | No | Read-only connector |
@@ -91,7 +91,7 @@ The connector uses five transport modes to maximize type coverage:
 | **NATIVE** | JDBC reads the type exactly | `boolean`, `bigint`, `number`, `varchar`, `date`, `uuid`, `array(varchar)`, `map(varchar, bigint)`, `row(id uuid, data json)` |
 | **VARCHAR transport** | Lossless string projection → decode back | `timestamp(p) with time zone`, `time with time zone`, intervals, high-precision `timestamp(p>9)` |
 | **VARBINARY transport** | Project as `VARBINARY` → decode back | `HyperLogLog`, `P4HyperLogLog`, `qdigest(T)`, `setdigest`, `tdigest` |
-| **JSON transport** | Recursive JSON rewrite → decode back | `array(timestamp(12))`, `map(varchar, interval day to second)`, structural columns whose non-native descendants can be represented safely through JSON transport |
+| **JSON transport** | Recursive JSON rewrite → decode back | `array(timestamp(3))`, `array(timestamp(12))`, `array(time(3))`, `array(date)`, `map(varchar, interval day to second)`, structural columns whose non-native descendants can be represented safely through JSON transport |
 | **UNSUPPORTED** | Fallback (`IGNORE` or `CONVERT_TO_VARCHAR`) | Opaque or connector-specific types without a safe transport rule |
 
 See the [connector reference](docs/src/main/sphinx/connector/trino.md) for detailed type transport rules.
@@ -100,7 +100,7 @@ See the [connector reference](docs/src/main/sphinx/connector/trino.md) for detai
 
 - Predicate pushdown for native columns and typed VARCHAR-transport temporal/interval columns
 - Trino-native expression and projection delegation for compatible casts, arithmetic, comparisons, `LIKE`, `IN`, regexp, JSON, date/time, dereference, and subscript expressions
-- `LIMIT` and `ORDER BY ... LIMIT`
+- `LIMIT` and partial `ORDER BY ... LIMIT` pushdown with local ordering verification
 - Aggregation pushdown for `count`, `count distinct`, `count_if`, `checksum`, `min/max`, `sum`, `avg` on supported types
 - Same-remote join pushdown for supported join shapes
 - Table statistics via `SHOW STATS FOR <table>` on the remote side
@@ -129,11 +129,13 @@ FROM TABLE(
 );
 ```
 
-- The inner SQL string is sent to remote Trino as written
+- The inner SQL is sent without expression rewriting; the connector can strip a
+  trailing semicolon and wrap the query to assign stable output aliases
 - Output columns still go through normal transport rules
-- Only top-level row-returning queries (`SELECT`, `WITH`, `VALUES`, `TABLE`)
-  are accepted; Trino performs no further validation or security checks on
-  passthrough SQL, and the execution boundary is remote access control
+- Only top-level query statements (`SELECT`, `WITH`, `VALUES`, `TABLE`) are
+  accepted. This syntactic check does not prove that invoked functions or table
+  functions are free of side effects; remote access control and read-only
+  credentials are the execution boundary
 - Unlike normal table access, `system.query` is explicit user SQL; remote
   query preparation and execution failures are returned directly and are not
   treated as fallback candidates.
@@ -150,18 +152,20 @@ FROM TABLE(
 ## Limitations
 
 - Read-only connector surface: no `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `CREATE`, `ALTER`, `DROP`
-- `system.query` supports only row-returning read queries; DDL, DML, and CALL statements are rejected before remote execution
+- `system.query` accepts only top-level query statements; top-level DDL, DML,
+  and CALL statements are rejected before remote execution, but functions and
+  table functions remain governed by remote access control
 - `CALL system.execute(...)` is inherited from the base JDBC framework but is
   denied by this connector's read-only access control
 - All remote SQL executes as the configured `connection-user`; end-user identity is not propagated
 - Remote session properties and roles are not propagated
 - Session-sensitive functions and casts such as `current_timestamp`,
-  `current_date`, current time zone functions, `from_iso8601_timestamp`, and
-  casts that add or remove a session time zone are not delegated unless their
-  semantics are represented by explicit, compatible SQL expressions.
+  `current_date`, current time zone functions, locale-sensitive date formatting,
+  and casts that depend on the session start date are evaluated locally.
+  Time-zone-dependent expressions are delegated only when local and remote
+  time zones match.
 - Remote delegation probes `CHAR` to `VARCHAR` cast semantics and trims legacy
   remote padding when such casts are pushed down.
-- Negative dates (before year 0001) are not preserved correctly through JDBC
 - Cross-cluster joins can only be improved with pushdown and statistics; the connector cannot remove the structural cost of federating between clusters
 - Tested against Trino 482 querying remote Trino 482; cross-version compatibility is not claimed yet
 

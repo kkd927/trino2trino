@@ -68,7 +68,7 @@ final class JsonTransportHelper
                 fieldExpressions.add(buildStringSurrogateExpression(fieldReference, fieldType));
             }
         }
-        return "ARRAY[" + String.join(", ", fieldExpressions) + "]";
+        return "CASE WHEN " + reference + " IS NULL THEN NULL ELSE ARRAY[" + String.join(", ", fieldExpressions) + "] END";
     }
 
     static boolean usesJsonObjectKeyEncoding(MapType mapType)

@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.trino;
 
+import io.trino.plugin.jdbc.LongWriteFunction;
 import io.trino.plugin.jdbc.WriteMapping;
 import io.trino.plugin.jdbc.expression.ParameterizedExpression;
 import io.trino.spi.expression.Constant;
@@ -32,8 +33,15 @@ import io.trino.type.IpAddressType;
 import io.trino.type.JsonType;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Proxy;
 import java.math.BigDecimal;
+import java.sql.PreparedStatement;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.trino.spi.type.BigintType.BIGINT;
@@ -90,7 +98,58 @@ class TestTrinoParameterBindingFactory
                 "CAST(INTERVAL '1' MONTH * CAST(? AS INTEGER) AS interval year to month)");
         assertBinding(
                 new Constant(1_234L, IntervalDayTimeType.INTERVAL_DAY_TIME),
-                "CAST(parse_duration(?) AS interval day to second)");
+                "CAST(INTERVAL '0.001' SECOND * CAST(? AS BIGINT) AS interval day to second)");
+    }
+
+    @Test
+    void testDayToSecondIntervalUsesExactSignedBigintBinding()
+            throws Exception
+    {
+        long value = -9_007_199_254_740_993L;
+        LongWriteFunction writeFunction = TemporalTransportCodec.intervalTransportWriteFunction(IntervalDayTimeType.INTERVAL_DAY_TIME);
+        AtomicReference<String> invokedMethod = new AtomicReference<>();
+        AtomicLong boundValue = new AtomicLong();
+        PreparedStatement statement = (PreparedStatement) Proxy.newProxyInstance(
+                PreparedStatement.class.getClassLoader(),
+                new Class<?>[] {PreparedStatement.class},
+                (_, method, arguments) -> {
+                    if (method.getName().startsWith("set")) {
+                        invokedMethod.set(method.getName());
+                        boundValue.set((long) arguments[1]);
+                    }
+                    return null;
+                });
+
+        writeFunction.set(statement, 1, value);
+
+        assertThat(writeFunction.getBindExpression()).isEqualTo("INTERVAL '0.001' SECOND * CAST(? AS BIGINT)");
+        assertThat(invokedMethod).hasValue("setLong");
+        assertThat(boundValue).hasValue(value);
+    }
+
+    @Test
+    void testTimestampTransportAcceptsExplicitExpandedYearSign()
+    {
+        assertThat(TemporalTransportCodec.parseShortTimestamp("+10000-01-01 00:00:00"))
+                .isEqualTo(LocalDateTime.of(10_000, 1, 1, 0, 0).toEpochSecond(ZoneOffset.UTC) * 1_000_000L);
+        assertThat(TemporalTransportCodec.parseShortTimestamp("-10000-01-01 00:00:00"))
+                .isEqualTo(LocalDateTime.of(-10_000, 1, 1, 0, 0).toEpochSecond(ZoneOffset.UTC) * 1_000_000L);
+
+        LongTimestamp expanded = TemporalTransportCodec.parseLongTimestamp("+10000-01-01 00:00:00.123456789012");
+        assertThat(expanded.getEpochMicros())
+                .isEqualTo(LocalDateTime.of(10_000, 1, 1, 0, 0).toEpochSecond(ZoneOffset.UTC) * 1_000_000L + 123_456L);
+        assertThat(expanded.getPicosOfMicro()).isEqualTo(789_012);
+    }
+
+    @Test
+    void testDateTransportAcceptsUnsignedExpandedYear()
+    {
+        assertThat(TemporalTransportCodec.parseDate("10000-01-01"))
+                .isEqualTo(LocalDate.of(10_000, 1, 1));
+        assertThat(TemporalTransportCodec.parseDate("+10000-01-01"))
+                .isEqualTo(LocalDate.of(10_000, 1, 1));
+        assertThat(TemporalTransportCodec.parseDate("-10000-01-01"))
+                .isEqualTo(LocalDate.of(-10_000, 1, 1));
     }
 
     @Test

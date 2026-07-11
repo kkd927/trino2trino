@@ -204,9 +204,11 @@ class TestTrinoConnectorTest
 
             // Pushdown: both sides are Trino with identical SQL syntax
             case SUPPORTS_LIMIT_PUSHDOWN,
-                 SUPPORTS_TOPN_PUSHDOWN,
                  SUPPORTS_AGGREGATION_PUSHDOWN,
                  SUPPORTS_AGGREGATION_PUSHDOWN_COUNT_DISTINCT -> true;
+            // Remote TopN is still applied, but transport projection can wrap it in
+            // an outer query, so local ordering verification must remain in the plan.
+            case SUPPORTS_TOPN_PUSHDOWN -> false;
             case SUPPORTS_JOIN_PUSHDOWN,
                  SUPPORTS_JOIN_PUSHDOWN_WITH_FULL_JOIN,
                  SUPPORTS_JOIN_PUSHDOWN_WITH_VARCHAR_EQUALITY,
@@ -250,7 +252,6 @@ class TestTrinoConnectorTest
             case SUPPORTS_NOT_NULL_CONSTRAINT -> false;
             case SUPPORTS_CREATE_VIEW,
                  SUPPORTS_CREATE_MATERIALIZED_VIEW -> false;
-            case SUPPORTS_NEGATIVE_DATE -> false;
 
             default -> super.hasBehavior(connectorBehavior);
         };
@@ -406,6 +407,9 @@ class TestTrinoConnectorTest
         assertThat(query("SELECT id FROM test_interval_filter_pushdown WHERE duration > INTERVAL '1' DAY"))
                 .isFullyPushedDown()
                 .matches("VALUES CAST('long' AS VARCHAR(5))");
+        assertThat(query("SELECT id FROM test_interval_filter_pushdown WHERE duration > INTERVAL '-1' DAY"))
+                .isFullyPushedDown()
+                .matches("VALUES CAST('short' AS VARCHAR(5)), CAST('long' AS VARCHAR(5))");
     }
 
     @Test

@@ -45,14 +45,24 @@ import static java.lang.Math.toIntExact;
 
 final class TemporalTransportCodec
 {
+    private static final Pattern UNSIGNED_EXTENDED_DATE_PATTERN = Pattern.compile("\\d{5,}-\\d{2}-\\d{2}");
     private static final Pattern TIME_WITH_TIME_ZONE_PATTERN = Pattern.compile("(?<time>\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,12})?)\\s*(?<offset>[+-]\\d{2}:\\d{2})");
-    private static final Pattern TIMESTAMP_PATTERN = Pattern.compile("(?<date>-?\\d{4,}-\\d{2}-\\d{2}) (?<time>\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,12})?)");
+    private static final Pattern TIMESTAMP_PATTERN = Pattern.compile("(?<date>[+-]?\\d{4,}-\\d{2}-\\d{2}) (?<time>\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,12})?)");
     private static final long PICOSECONDS_PER_SECOND = 1_000_000_000_000L;
     private static final long PICOSECONDS_PER_MINUTE = 60 * PICOSECONDS_PER_SECOND;
     private static final long PICOSECONDS_PER_HOUR = 60 * PICOSECONDS_PER_MINUTE;
     private static final long PICOSECONDS_PER_DAY = 24 * PICOSECONDS_PER_HOUR;
 
     private TemporalTransportCodec() {}
+
+    static LocalDate parseDate(String value)
+    {
+        String normalized = value.trim();
+        if (UNSIGNED_EXTENDED_DATE_PATTERN.matcher(normalized).matches()) {
+            normalized = "+" + normalized;
+        }
+        return LocalDate.parse(normalized);
+    }
 
     static long parseTimeToPicos(String value)
     {
@@ -162,7 +172,7 @@ final class TemporalTransportCodec
                     statement.setInt(index, toIntExact(value));
                     return;
                 }
-                statement.setString(index, value + "ms");
+                statement.setLong(index, value);
             }
         };
     }
@@ -172,7 +182,7 @@ final class TemporalTransportCodec
         if (TrinoTypeClassifier.isIntervalYearToMonthType(type)) {
             return "INTERVAL '1' MONTH * CAST(? AS INTEGER)";
         }
-        return "parse_duration(?)";
+        return "INTERVAL '0.001' SECOND * CAST(? AS BIGINT)";
     }
 
     private static LongWriteFunction stringLongTransportWriteFunction(String bindType, LongFunction<String> formatter)
@@ -338,7 +348,7 @@ final class TemporalTransportCodec
         if (!matcher.matches()) {
             throw new TrinoException(JDBC_ERROR, "Invalid timestamp value: " + value);
         }
-        LocalDate date = LocalDate.parse(matcher.group("date"));
+        LocalDate date = parseDate(matcher.group("date"));
         ParsedClockTime parsedClockTime = parseClockTime(matcher.group("time"));
         LocalDateTime localDateTime = LocalDateTime.of(date, LocalTime.ofNanoOfDay(parsedClockTime.picosOfDay() / 1_000L));
         long epochSecond = localDateTime.toEpochSecond(ZoneOffset.UTC);

@@ -152,7 +152,7 @@ final class TimestampWithTimeZoneTransport
             throw new TrinoException(JDBC_ERROR, "Invalid timestamp with time zone transport value: " + value);
         }
 
-        LocalDate date = LocalDate.parse(matcher.group("date"));
+        LocalDate date = TemporalTransportCodec.parseDate(matcher.group("date"));
         LocalTime time = LocalTime.parse(matcher.group("time"));
         ZoneOffset offset = ZoneOffset.of(matcher.group("offset"));
         long fractionPicos = parseFractionToPicos(matcher.group("fraction"));

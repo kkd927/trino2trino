@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.trino;
 
+import com.google.common.collect.ImmutableSet;
 import io.trino.plugin.jdbc.JdbcColumnHandle;
 import io.trino.plugin.jdbc.JdbcExpression;
 import io.trino.plugin.jdbc.JdbcTypeHandle;
@@ -75,7 +76,7 @@ final class TrinoRemoteSqlRenderer
         this.compatibilityRegistry = requireNonNull(compatibilityRegistry, "compatibilityRegistry is null");
     }
 
-    private static final Set<FunctionName> COMPARISON_FUNCTION_NAMES = Set.of(
+    private static final Set<FunctionName> COMPARISON_FUNCTION_NAMES = ImmutableSet.of(
             StandardFunctions.EQUAL_OPERATOR_FUNCTION_NAME,
             StandardFunctions.NOT_EQUAL_OPERATOR_FUNCTION_NAME,
             StandardFunctions.LESS_THAN_OPERATOR_FUNCTION_NAME,

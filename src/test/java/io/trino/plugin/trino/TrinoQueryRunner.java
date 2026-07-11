@@ -110,6 +110,9 @@ public final class TrinoQueryRunner
         DistributedQueryRunner remoteRunner = DistributedQueryRunner.builder(
                         testSessionBuilder().setCatalog("tpch").setSchema("tiny").build())
                 .setWorkerCount(0)
+                // The full connector suite issues thousands of remote queries in parallel.
+                // Keep completed queries available while JDBC fetches their result pages.
+                .addExtraProperty("query.max-history", "1000")
                 .build();
         try {
             remoteRunner.installPlugin(new TpchPlugin());
@@ -314,6 +317,24 @@ public final class TrinoQueryRunner
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_row_null AS SELECT CAST(ROW('Alice', NULL) AS ROW(name VARCHAR, age INTEGER)) AS x UNION ALL SELECT CAST(NULL AS ROW(name VARCHAR, age INTEGER))");
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_row_temporal_null AS
+                SELECT * FROM (
+                    VALUES
+                        (1, CAST(NULL AS ROW(ts TIMESTAMP(3), name VARCHAR))),
+                        (2, CAST(ROW(CAST(NULL AS TIMESTAMP(3)), CAST(NULL AS VARCHAR)) AS ROW(ts TIMESTAMP(3), name VARCHAR))),
+                        (3, CAST(ROW(TIMESTAMP '2024-01-15 10:30:45.123', 'ok') AS ROW(ts TIMESTAMP(3), name VARCHAR)))
+                ) AS t(id, x)
+                """);
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_array_row_temporal_null AS
+                SELECT ARRAY[
+                    CAST(NULL AS ROW(ts TIMESTAMP(3), name VARCHAR)),
+                    CAST(ROW(CAST(NULL AS TIMESTAMP(3)), CAST(NULL AS VARCHAR)) AS ROW(ts TIMESTAMP(3), name VARCHAR))
+                ] AS x
+                """);
 
         // --- Nested: array(map(varchar, varchar)) ---
         remoteRunner.execute(memorySession,
@@ -373,6 +394,17 @@ public final class TrinoQueryRunner
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_date AS SELECT x FROM (VALUES DATE '2024-01-15', DATE '1999-12-31') AS t(x)");
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_historical_date AS
+                SELECT * FROM (
+                    VALUES
+                        (1, DATE '-0001-01-01'),
+                        (2, DATE '0000-01-01'),
+                        (3, DATE '1582-10-10'),
+                        (4, DATE '+10000-01-01')
+                ) AS t(id, x)
+                """);
 
         // --- Timestamp with precision ---
         remoteRunner.execute(
@@ -397,6 +429,9 @@ public final class TrinoQueryRunner
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_array_date AS SELECT ARRAY[DATE '2024-01-01', DATE '2024-06-15'] AS x");
+        remoteRunner.execute(
+                memorySession,
+                "CREATE TABLE test_array_historical_date AS SELECT ARRAY[DATE '-0001-01-01', DATE '0000-01-01', DATE '1582-10-10', DATE '+10000-01-01'] AS x");
 
         // --- Map with decimal values ---
         remoteRunner.execute(
@@ -407,6 +442,16 @@ public final class TrinoQueryRunner
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_array_timestamp AS SELECT ARRAY[TIMESTAMP '2024-01-15 10:30:45.123456', TIMESTAMP '2024-06-15 23:59:59.000000'] AS x");
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_timestamp12_topn AS
+                SELECT * FROM (
+                    VALUES
+                        ('first', CAST(TIMESTAMP '2024-01-15 10:30:45.123456789010' AS TIMESTAMP(12))),
+                        ('second', CAST(TIMESTAMP '2024-01-15 10:30:45.123456789011' AS TIMESTAMP(12))),
+                        ('third', CAST(TIMESTAMP '2024-01-15 10:30:45.123456789012' AS TIMESTAMP(12)))
+                ) AS t(id, ts)
+                """);
 
         // --- Array of timestamp with time zone ---
         remoteRunner.execute(
@@ -438,6 +483,15 @@ public final class TrinoQueryRunner
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_time12 AS SELECT CAST(TIME '10:30:45.123456789012' AS TIME(12)) AS x");
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_array_time_precision AS
+                SELECT
+                    ARRAY[CAST(TIME '10:30:45' AS TIME(0))] AS p0,
+                    ARRAY[CAST(TIME '10:30:45.123' AS TIME(3))] AS p3,
+                    ARRAY[CAST(TIME '10:30:45.123456' AS TIME(6))] AS p6,
+                    ARRAY[CAST(TIME '10:30:45.123456789' AS TIME(9))] AS p9
+                """);
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_timetz3 AS SELECT CAST(TIME '10:30:45.123 +09:00' AS TIME(3) WITH TIME ZONE) AS x");

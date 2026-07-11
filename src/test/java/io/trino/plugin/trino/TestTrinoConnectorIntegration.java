@@ -14,9 +14,13 @@
 package io.trino.plugin.trino;
 
 import io.trino.Session;
+import io.trino.sql.planner.plan.TopNNode;
 import io.trino.testing.MaterializedResult;
 import org.junit.jupiter.api.Test;
 
+import java.util.Locale;
+
+import static io.trino.spi.type.TimeZoneKey.getTimeZoneKey;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -277,6 +281,29 @@ abstract class TestTrinoConnectorIntegration
         assertThat(result.getMaterializedRows().get(1).getField(0)).isNull();
     }
 
+    @Test
+    void testJsonTransportPreservesNullRow()
+    {
+        Session delegationOff = Session.builder(getSession())
+                .setCatalogSessionProperty("remote", "remote_delegation_enabled", "false")
+                .build();
+
+        assertThat(query(delegationOff, "SELECT id FROM remote.default.test_row_temporal_null WHERE x IS NULL"))
+                .matches("VALUES 1");
+
+        MaterializedResult rows = computeActual(
+                delegationOff,
+                "SELECT id, x FROM remote.default.test_row_temporal_null ORDER BY id");
+        assertThat(rows.getMaterializedRows().get(0).getField(1)).isNull();
+        assertThat(rows.getMaterializedRows().get(1).getField(1)).isNotNull();
+        assertThat(rows.getMaterializedRows().get(2).getField(1)).isNotNull();
+
+        assertThat(query(
+                delegationOff,
+                "SELECT x[1] IS NULL, x[2] IS NULL FROM remote.default.test_array_row_temporal_null"))
+                .matches("VALUES (true, false)");
+    }
+
     // =========================================================================
     // 8. Deeply nested complex types
     // =========================================================================
@@ -497,6 +524,48 @@ abstract class TestTrinoConnectorIntegration
                 ))
                 """);
         assertThat(result.getOnlyValue()).isEqualTo("2 00:00:00.000");
+    }
+
+    @Test
+    void testQueryPassthroughIntervalResults()
+    {
+        assertThat(query(
+                """
+                SELECT day_interval, month_interval
+                FROM TABLE(remote.system.query(
+                    query => 'SELECT INTERVAL ''1'' DAY AS day_interval, INTERVAL ''14'' MONTH AS month_interval'
+                ))
+                """))
+                .matches("VALUES (INTERVAL '1' DAY, INTERVAL '14' MONTH)");
+
+        assertThat(query(
+                """
+                SELECT day_interval, month_interval
+                FROM TABLE(remote.system.query(
+                    query => 'SELECT CAST(NULL AS INTERVAL DAY TO SECOND) AS day_interval, CAST(NULL AS INTERVAL YEAR TO MONTH) AS month_interval'
+                ))
+                """))
+                .matches("VALUES (CAST(NULL AS INTERVAL DAY TO SECOND), CAST(NULL AS INTERVAL YEAR TO MONTH))");
+    }
+
+    @Test
+    void testQueryPassthroughTrailingSemicolon()
+    {
+        assertThat(query("SELECT * FROM TABLE(remote.system.query(query => 'SELECT 1 AS value;'))"))
+                .matches("VALUES 1");
+    }
+
+    @Test
+    void testQueryPassthroughExpandedPositiveTimestampYear()
+    {
+        assertThat(query(
+                """
+                SELECT CAST(value AS VARCHAR)
+                FROM TABLE(remote.system.query(
+                    query => 'SELECT CAST(TIMESTAMP ''+10000-01-01 00:00:00.123456789012'' AS TIMESTAMP(12)) AS value'
+                ))
+                """))
+                .matches("VALUES CAST('+10000-01-01 00:00:00.123456789012' AS VARCHAR)");
     }
 
     // =========================================================================
@@ -734,7 +803,7 @@ abstract class TestTrinoConnectorIntegration
     }
 
     @Test
-    void testComplexFunctionRemoteDelegation()
+    void testComplexFunctionDelegationKeepsLocaleSensitiveFilterLocal()
     {
         String sql =
                 """
@@ -749,7 +818,9 @@ abstract class TestTrinoConnectorIntegration
         assertThat(result.getOnlyColumnAsSet()).containsExactly("100", "200");
 
         String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
-        assertThat(explain).doesNotContain("ScanFilterProject");
+        assertThat(explain).contains("ScanFilterProject");
+        assertThat(explain).contains("filterPredicate = (date_format");
+        assertThat(explain).contains("constraints=[ParameterizedExpression[expression=regexp_like");
     }
 
     @Test
@@ -821,6 +892,77 @@ abstract class TestTrinoConnectorIntegration
                 .isFullyPushedDown();
         assertThat(query(delegationOff, "SELECT count(*) FROM remote.default.nation"))
                 .isFullyPushedDown();
+        assertThat(query(delegationOff, "SELECT sum(x) FROM remote.default.test_decimal"))
+                .isFullyPushedDown()
+                .matches("VALUES CAST(1123.44 AS DECIMAL(38, 2))");
+    }
+
+    @Test
+    void testLocaleSensitiveFormattingFallsBackLocally()
+    {
+        Session frenchSession = Session.builder(getSession())
+                .setLocale(Locale.FRANCE)
+                .build();
+        String expected = computeActual(
+                frenchSession,
+                "SELECT format_datetime(TIMESTAMP '2024-01-15 10:30:45.123', 'MMMM')")
+                .getOnlyValue()
+                .toString();
+
+        assertThat(computeActual(
+                frenchSession,
+                "SELECT format_datetime(CAST(log_timestamp AS timestamp), 'MMMM') FROM remote.default.test_delegation_log WHERE path = '/post/100'")
+                .getOnlyValue())
+                .isEqualTo(expected);
+    }
+
+    @Test
+    void testSessionStartDependentCastFallsBackLocally()
+    {
+        String remoteTimeZone = computeActual(
+                "SELECT * FROM TABLE(remote.system.query(query => 'SELECT current_timezone()'))")
+                .getOnlyValue()
+                .toString();
+        String localTimeZone = remoteTimeZone.toUpperCase(Locale.ENGLISH).contains("UTC") || remoteTimeZone.toUpperCase(Locale.ENGLISH).contains("GMT")
+                ? "Asia/Seoul"
+                : "UTC";
+        Session session = Session.builder(getSession())
+                .setTimeZoneKey(getTimeZoneKey(localTimeZone))
+                .build();
+
+        String expected = computeActual(
+                session,
+                "SELECT CAST(CAST(TIMESTAMP '2024-01-15 10:30:45.123' AS TIME(3) WITH TIME ZONE) AS VARCHAR)")
+                .getOnlyValue()
+                .toString();
+        assertThat(computeActual(
+                session,
+                "SELECT CAST(CAST(ts AS TIME(3) WITH TIME ZONE) AS VARCHAR) FROM remote.default.test_timestamp12_topn WHERE id = 'first'")
+                .getOnlyValue())
+                .isEqualTo(expected);
+    }
+
+    @Test
+    void testTransportTopNRetainsLocalOrdering()
+    {
+        assertThat(query("SELECT id FROM remote.default.test_timestamp12_topn ORDER BY ts DESC LIMIT 2"))
+                .ordered()
+                .matches("VALUES 'third', 'second'")
+                .isNotFullyPushedDown(TopNNode.class);
+
+        String transportExplain = computeActual(
+                "EXPLAIN SELECT id FROM remote.default.test_timestamp12_topn ORDER BY ts DESC LIMIT 2")
+                .getOnlyValue()
+                .toString();
+        assertThat(transportExplain).contains("sortOrder=[");
+        assertThat(transportExplain).contains("limit=2");
+
+        String nativeExplain = computeActual(
+                "EXPLAIN SELECT nationkey FROM remote.default.nation ORDER BY regionkey DESC LIMIT 2")
+                .getOnlyValue()
+                .toString();
+        assertThat(nativeExplain).contains("sortOrder=[");
+        assertThat(nativeExplain).contains("limit=2");
     }
 
     @Test

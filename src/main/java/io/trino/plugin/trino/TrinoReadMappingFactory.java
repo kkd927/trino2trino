@@ -17,6 +17,7 @@ import io.airlift.slice.Slices;
 import io.airlift.stats.TDigest;
 import io.trino.plugin.jdbc.ColumnMapping;
 import io.trino.plugin.jdbc.JdbcTypeHandle;
+import io.trino.plugin.jdbc.LongReadFunction;
 import io.trino.plugin.jdbc.ObjectReadFunction;
 import io.trino.plugin.jdbc.ObjectWriteFunction;
 import io.trino.plugin.jdbc.PredicatePushdownController;
@@ -42,6 +43,8 @@ import io.trino.spi.type.TypeManager;
 import io.trino.spi.type.UuidType;
 import io.trino.spi.type.VarcharType;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Types;
 import java.util.Optional;
 import java.util.function.Function;
@@ -52,7 +55,7 @@ import static io.trino.plugin.jdbc.StandardColumnMappings.bigintColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.booleanColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.charReadFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.charWriteFunction;
-import static io.trino.plugin.jdbc.StandardColumnMappings.dateColumnMappingUsingLocalDate;
+import static io.trino.plugin.jdbc.StandardColumnMappings.dateWriteFunctionUsingLocalDate;
 import static io.trino.plugin.jdbc.StandardColumnMappings.decimalColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.doubleColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.integerColumnMapping;
@@ -67,6 +70,7 @@ import static io.trino.plugin.jdbc.TypeHandlingJdbcSessionProperties.getUnsuppor
 import static io.trino.plugin.jdbc.UnsupportedTypeHandling.CONVERT_TO_VARCHAR;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.type.CharType.createCharType;
+import static io.trino.spi.type.DateType.DATE;
 import static io.trino.spi.type.DecimalType.createDecimalType;
 import static io.trino.spi.type.TimeType.createTimeType;
 import static io.trino.spi.type.TimeWithTimeZoneType.createTimeWithTimeZoneType;
@@ -108,9 +112,9 @@ final class TrinoReadMappingFactory
             case Types.DOUBLE -> Optional.of(doubleColumnMapping());
             case Types.DECIMAL, Types.NUMERIC -> Optional.of(decimalColumnMapping(decimalType(typeHandle, logicalType), UNNECESSARY));
             case Types.CHAR -> Optional.of(charColumnMapping(typeHandle, logicalType));
-            case Types.VARCHAR, Types.LONGVARCHAR -> Optional.of(varcharColumnMapping(varcharType(typeHandle, logicalType)));
+            case Types.VARCHAR, Types.LONGVARCHAR -> transportMapping.isPresent() ? transportMapping : Optional.of(varcharColumnMapping(varcharType(typeHandle, logicalType)));
             case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY -> Optional.of(varbinaryColumnMapping());
-            case Types.DATE -> Optional.of(dateColumnMappingUsingLocalDate());
+            case Types.DATE -> Optional.of(dateColumnMapping());
             case Types.TIME -> Optional.of(timeColumnMapping(typeHandle, typeName, logicalType));
             case Types.TIMESTAMP -> timestampReadMapping(typeHandle, typeName, normalizedTypeName, logicalType);
             case Types.TIMESTAMP_WITH_TIMEZONE -> timestampWithTimeZoneColumnMapping(typeHandle, typeName, logicalType);
@@ -203,13 +207,6 @@ final class TrinoReadMappingFactory
                     predicatePushdownController);
         }
         if (logicalType instanceof TimestampType timestampType) {
-            if (timestampType.isShort()) {
-                return ColumnMapping.longMapping(
-                        timestampType,
-                        (rs, idx) -> TemporalTransportCodec.parseShortTimestamp(rs.getString(idx)),
-                        TemporalTransportCodec.shortTimestampTransportWriteFunction(timestampType),
-                        predicatePushdownController);
-            }
             return ColumnMapping.objectMapping(
                     timestampType,
                     ObjectReadFunction.of(LongTimestamp.class, (rs, idx) -> TemporalTransportCodec.parseLongTimestamp(rs.getString(idx))),
@@ -252,6 +249,29 @@ final class TrinoReadMappingFactory
                     predicatePushdownController);
         }
         throw new TrinoException(NOT_SUPPORTED, "Unsupported VARCHAR transport type: " + logicalType);
+    }
+
+    private static ColumnMapping dateColumnMapping()
+    {
+        return ColumnMapping.longMapping(
+                DATE,
+                new LongReadFunction()
+                {
+                    @Override
+                    public boolean isNull(ResultSet resultSet, int columnIndex)
+                            throws SQLException
+                    {
+                        return resultSet.getString(columnIndex) == null;
+                    }
+
+                    @Override
+                    public long readLong(ResultSet resultSet, int columnIndex)
+                            throws SQLException
+                    {
+                        return TemporalTransportCodec.parseDate(resultSet.getString(columnIndex)).toEpochDay();
+                    }
+                },
+                dateWriteFunctionUsingLocalDate());
     }
 
     private ColumnMapping jsonTransportColumnMapping(Type logicalType)

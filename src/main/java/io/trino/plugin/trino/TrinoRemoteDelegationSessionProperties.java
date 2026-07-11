@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.trino;
 
+import com.google.common.collect.ImmutableList;
 import com.google.inject.Inject;
 import io.trino.plugin.base.session.SessionPropertiesProvider;
 import io.trino.spi.connector.ConnectorSession;
@@ -32,7 +33,7 @@ public class TrinoRemoteDelegationSessionProperties
     @Inject
     TrinoRemoteDelegationSessionProperties(TrinoRemoteDelegationConfig config)
     {
-        properties = List.of(
+        properties = ImmutableList.of(
                 booleanProperty(
                         REMOTE_DELEGATION_ENABLED,
                         "Enable Trino-native remote SQL delegation",

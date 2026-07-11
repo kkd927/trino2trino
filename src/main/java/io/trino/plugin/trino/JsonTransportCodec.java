@@ -42,7 +42,6 @@ import io.trino.spi.type.VarcharType;
 import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.time.LocalDate;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -243,7 +242,12 @@ final class JsonTransportCodec
             return;
         }
         if (type == BOOLEAN) {
-            type.writeBoolean(builder, Boolean.parseBoolean(value));
+            boolean booleanValue = switch (value) {
+                case "true" -> true;
+                case "false" -> false;
+                default -> throw new TrinoException(JDBC_ERROR, "Invalid boolean JSON transport value: " + value);
+            };
+            type.writeBoolean(builder, booleanValue);
             return;
         }
         if (type instanceof VarbinaryType) {
@@ -251,7 +255,7 @@ final class JsonTransportCodec
             return;
         }
         if (type instanceof DateType) {
-            type.writeLong(builder, LocalDate.parse(value).toEpochDay());
+            type.writeLong(builder, TemporalTransportCodec.parseDate(value).toEpochDay());
             return;
         }
         if (type instanceof TimeType) {

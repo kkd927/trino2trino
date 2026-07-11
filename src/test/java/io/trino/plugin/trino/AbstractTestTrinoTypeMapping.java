@@ -243,6 +243,28 @@ abstract class AbstractTestTrinoTypeMapping
     }
 
     @Test
+    void testHistoricalDateRoundTrip()
+    {
+        Session delegationOff = Session.builder(getSession())
+                .setCatalogSessionProperty("remote", "remote_delegation_enabled", "false")
+                .build();
+
+        assertThat(query(
+                delegationOff,
+                "SELECT id, CAST(x AS VARCHAR) FROM remote.default.test_historical_date ORDER BY id"))
+                .ordered()
+                .matches("VALUES " +
+                        "(1, CAST('-0001-01-01' AS VARCHAR)), " +
+                        "(2, CAST('0000-01-01' AS VARCHAR)), " +
+                        "(3, CAST('1582-10-10' AS VARCHAR)), " +
+                        "(4, CAST('10000-01-01' AS VARCHAR))");
+        assertThat(query(
+                delegationOff,
+                "SELECT id FROM remote.default.test_historical_date WHERE x = DATE '-0001-01-01'"))
+                .matches("VALUES 1");
+    }
+
+    @Test
     void testTimestamp6Precision()
     {
         assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_timestamp6").getOnlyValue())
@@ -274,6 +296,40 @@ abstract class AbstractTestTrinoTypeMapping
         assertThat(unnested.getRowCount()).isEqualTo(2);
         assertThat(unnested.getMaterializedRows().get(0).getField(0).toString()).isEqualTo("2024-01-01");
         assertThat(unnested.getMaterializedRows().get(1).getField(0).toString()).isEqualTo("2024-06-15");
+    }
+
+    @Test
+    void testArrayOfHistoricalDate()
+    {
+        Session delegationOff = Session.builder(getSession())
+                .setCatalogSessionProperty("remote", "remote_delegation_enabled", "false")
+                .build();
+
+        assertThat(query(
+                delegationOff,
+                "SELECT CAST(x[1] AS VARCHAR), CAST(x[2] AS VARCHAR), CAST(x[3] AS VARCHAR), CAST(x[4] AS VARCHAR) FROM remote.default.test_array_historical_date"))
+                .matches("VALUES (" +
+                        "CAST('-0001-01-01' AS VARCHAR), " +
+                        "CAST('0000-01-01' AS VARCHAR), " +
+                        "CAST('1582-10-10' AS VARCHAR), " +
+                        "CAST('10000-01-01' AS VARCHAR))");
+    }
+
+    @Test
+    void testArrayOfTimePreservesFractionalSeconds()
+    {
+        Session delegationOff = Session.builder(getSession())
+                .setCatalogSessionProperty("remote", "remote_delegation_enabled", "false")
+                .build();
+
+        assertThat(query(
+                delegationOff,
+                "SELECT CAST(p0[1] AS VARCHAR), CAST(p3[1] AS VARCHAR), CAST(p6[1] AS VARCHAR), CAST(p9[1] AS VARCHAR) FROM remote.default.test_array_time_precision"))
+                .matches("VALUES (" +
+                        "CAST('10:30:45' AS VARCHAR), " +
+                        "CAST('10:30:45.123' AS VARCHAR), " +
+                        "CAST('10:30:45.123456' AS VARCHAR), " +
+                        "CAST('10:30:45.123456789' AS VARCHAR))");
     }
 
     @Test

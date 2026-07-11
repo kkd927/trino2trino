@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.trino;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.inject.Inject;
 import io.airlift.log.Logger;
 import io.trino.plugin.base.aggregation.AggregateFunctionRewriter;
@@ -84,12 +85,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static io.trino.matching.Pattern.typeOf;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
@@ -153,17 +154,18 @@ public class TrinoClient
         // and backs the aggregate function rewriter, so it cannot be removed.
         this.connectorExpressionRewriter = createConnectorExpressionRewriter(this::quoted);
 
-        // Trino supports all standard aggregate functions natively, so pushdown is safe.
+        // Register only aggregate implementations whose semantics match remote Trino.
         this.aggregateFunctionRewriter = new AggregateFunctionRewriter<>(
                 connectorExpressionRewriter,
-                Set.<AggregateFunctionRule<JdbcExpression, ParameterizedExpression>>of(
-                        new ImplementCountAll(BIGINT_TYPE_HANDLE),
-                        new ImplementCount(BIGINT_TYPE_HANDLE),
-                        new ImplementCountDistinct(BIGINT_TYPE_HANDLE, true),
-                        new ImplementMinMax(true), // both sides share Trino ordering semantics
-                        new ImplementSum(TrinoClient::decimalTypeHandle),
-                        new ImplementAvgFloatingPoint(),
-                        new ImplementAvgDecimal()));
+                ImmutableSet.<AggregateFunctionRule<JdbcExpression, ParameterizedExpression>>builder()
+                        .add(new ImplementCountAll(BIGINT_TYPE_HANDLE))
+                        .add(new ImplementCount(BIGINT_TYPE_HANDLE))
+                        .add(new ImplementCountDistinct(BIGINT_TYPE_HANDLE, true))
+                        .add(new ImplementMinMax(true)) // both sides share Trino ordering semantics
+                        .add(new ImplementSum(TrinoClient::decimalTypeHandle))
+                        .add(new ImplementAvgFloatingPoint())
+                        .add(new ImplementAvgDecimal())
+                        .build());
     }
 
     static ConnectorExpressionRewriter<ParameterizedExpression> createConnectorExpressionRewriter(Function<String, String> identifierQuote)
@@ -180,7 +182,7 @@ public class TrinoClient
     {
         return Optional.of(new JdbcTypeHandle(
                 Types.DECIMAL,
-                Optional.of("decimal"),
+                Optional.of(decimalType.getDisplayName()),
                 Optional.of(decimalType.getPrecision()),
                 Optional.of(decimalType.getScale()),
                 Optional.empty(),
@@ -232,9 +234,8 @@ public class TrinoClient
     // -------------------------------------------------------------------------
     // Pushdown support: LIMIT, TopN, Aggregation, Join
     //
-    // Both sides are Trino with identical SQL syntax, so all standard
-    // pushdown operations below are safe. This significantly reduces data transfer
-    // through the JDBC bottleneck.
+    // Both sides are Trino with identical SQL syntax, so the supported pushdown
+    // operations below can significantly reduce data transfer through JDBC.
     // -------------------------------------------------------------------------
 
     @Override
@@ -264,7 +265,9 @@ public class TrinoClient
     @Override
     public boolean isTopNGuaranteed(ConnectorSession session)
     {
-        return true;
+        // A transport projection can wrap the remote TopN in an outer query whose
+        // ordering is not guaranteed by SQL, so retain the local TopN operation.
+        return false;
     }
 
     @Override
@@ -389,20 +392,23 @@ public class TrinoClient
     @Override
     public JdbcTableHandle getTableHandle(ConnectorSession session, PreparedQuery preparedQuery)
     {
-        PassthroughQueryValidator.validate(stripTrailingSemicolon(preparedQuery.query()));
+        PreparedQuery normalizedQuery = normalizePassthroughQuery(preparedQuery);
+        PassthroughQueryValidator.validate(normalizedQuery.query());
         try (Connection connection = getConnection(session)) {
-            List<PassthroughQueryMetadataHelper.DescribedOutputColumn> outputColumns = passthroughQueryMetadataHelper.describeOutputColumns(connection, preparedQuery);
-            PreparedQuery addressableQuery = passthroughQueryMetadataHelper.withOutputAliases(preparedQuery, outputColumns);
+            List<PassthroughQueryMetadataHelper.DescribedOutputColumn> outputColumns = passthroughQueryMetadataHelper.describeOutputColumns(connection, normalizedQuery);
+            PreparedQuery addressableQuery = passthroughQueryMetadataHelper.withOutputAliases(normalizedQuery, outputColumns);
             JdbcTableHandle tableHandle;
             try {
                 tableHandle = super.getTableHandle(session, addressableQuery);
             }
-            catch (TrinoException | UnsupportedOperationException e) {
+            catch (TrinoException | UnsupportedOperationException metadataFailure) {
                 // BaseJdbcClient.getTableHandle may throw TrinoException for passthrough
                 // queries that use types or syntax not representable by standard JDBC metadata.
                 // Some paths surface as UnsupportedOperationException from BaseJdbcClient.
                 // Fall back to building the table handle from DESCRIBE OUTPUT metadata.
-                return passthroughQueryMetadataHelper.buildPassthroughTableHandle(session, connection, addressableQuery, outputColumns);
+                return executeFallback(
+                        metadataFailure,
+                        () -> passthroughQueryMetadataHelper.buildPassthroughTableHandle(session, connection, addressableQuery, outputColumns));
             }
             return passthroughQueryMetadataHelper.rewriteColumns(session, connection, tableHandle, outputColumns);
         }
@@ -410,13 +416,7 @@ public class TrinoClient
             // DESCRIBE OUTPUT-based metadata is unavailable for this query; retry the
             // plain JDBC metadata path, keeping this failure attached if the retry
             // also fails. Connector-internal failures (TrinoException) propagate.
-            try {
-                return super.getTableHandle(session, preparedQuery);
-            }
-            catch (RuntimeException retryFailure) {
-                retryFailure.addSuppressed(e);
-                throw retryFailure;
-            }
+            return executeFallback(e, () -> super.getTableHandle(session, normalizedQuery));
         }
     }
 
@@ -700,5 +700,23 @@ public class TrinoClient
             return trimmed.substring(0, trimmed.length() - 1);
         }
         return trimmed;
+    }
+
+    static PreparedQuery normalizePassthroughQuery(PreparedQuery preparedQuery)
+    {
+        return preparedQuery.transformQuery(TrinoClient::stripTrailingSemicolon);
+    }
+
+    static <T> T executeFallback(Throwable primaryFailure, Supplier<T> fallback)
+    {
+        try {
+            return fallback.get();
+        }
+        catch (RuntimeException fallbackFailure) {
+            if (fallbackFailure != primaryFailure) {
+                fallbackFailure.addSuppressed(primaryFailure);
+            }
+            throw fallbackFailure;
+        }
     }
 }
