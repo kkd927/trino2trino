@@ -89,7 +89,7 @@ The connector uses five transport modes to maximize type coverage:
 | Transport Mode | Strategy | Examples |
 |---------------|----------|----------|
 | **NATIVE** | JDBC reads the type exactly | `boolean`, `bigint`, `number`, `varchar`, `date`, `uuid`, `array(varchar)`, `map(varchar, bigint)`, `row(id uuid, data json)` |
-| **VARCHAR transport** | `CAST(... AS VARCHAR)` → decode back | `time with time zone`, `interval year to month`, high-precision `timestamp(p>9)` |
+| **VARCHAR transport** | Lossless string projection → decode back | `timestamp(p) with time zone`, `time with time zone`, intervals, high-precision `timestamp(p>9)` |
 | **VARBINARY transport** | Project as `VARBINARY` → decode back | `HyperLogLog`, `P4HyperLogLog`, `qdigest(T)`, `setdigest`, `tdigest` |
 | **JSON transport** | Recursive JSON rewrite → decode back | `array(timestamp(12))`, `map(varchar, interval day to second)`, structural columns whose non-native descendants can be represented safely through JSON transport |
 | **UNSUPPORTED** | Fallback (`IGNORE` or `CONVERT_TO_VARCHAR`) | Opaque or connector-specific types without a safe transport rule |
@@ -104,6 +104,10 @@ See the [connector reference](docs/src/main/sphinx/connector/trino.md) for detai
 - Aggregation pushdown for `count`, `count distinct`, `count_if`, `checksum`, `min/max`, `sum`, `avg` on supported types
 - Same-remote join pushdown for supported join shapes
 - Table statistics via `SHOW STATS FOR <table>` on the remote side
+
+`AUTOMATIC` join pushdown requires remote column statistics, including the
+distinct-value count for join keys. If the remote catalog only reports a table
+row count, the join safely remains local.
 
 Remote delegation delegates compatible remote subtrees and safely falls back to
 local evaluation for unsupported expressions. Disabling it
@@ -147,10 +151,8 @@ FROM TABLE(
 
 - Read-only connector surface: no `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `CREATE`, `ALTER`, `DROP`
 - `system.query` supports only row-returning read queries; DDL, DML, and CALL statements are rejected before remote execution
-- `CALL system.execute(...)` is inherited from the base JDBC framework and is
-  **not** covered by the read-only enforcement: it executes arbitrary SQL,
-  including writes, on the remote cluster as the configured `connection-user`.
-  As with `system.query`, the execution boundary is remote access control
+- `CALL system.execute(...)` is inherited from the base JDBC framework but is
+  denied by this connector's read-only access control
 - All remote SQL executes as the configured `connection-user`; end-user identity is not propagated
 - Remote session properties and roles are not propagated
 - Session-sensitive functions and casts such as `current_timestamp`,

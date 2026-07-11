@@ -14,31 +14,28 @@
 package io.trino.plugin.trino;
 
 import io.trino.Session;
+import io.trino.plugin.jdbc.BaseJdbcConnectorTest;
 import io.trino.spi.type.TimeZoneKey;
-import io.trino.testing.AbstractTestQueryFramework;
 import io.trino.testing.MaterializedResult;
-import io.trino.testing.QueryRunner;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.function.Function;
 
+import static java.util.stream.Collectors.joining;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Tests type mapping reads through the trino2trino connector.
  * Verifies that pre-created remote tables with various types are
  * correctly read through the JDBC federation layer.
+ *
+ * <p>This is inherited by the integration suite so all integration and type
+ * mapping assertions share one local/remote query-runner pair.
  */
-class TestTrinoTypeMapping
-        extends AbstractTestQueryFramework
+abstract class AbstractTestTrinoTypeMapping
+        extends BaseJdbcConnectorTest
 {
-    @Override
-    protected QueryRunner createQueryRunner()
-            throws Exception
-    {
-        return TrinoQueryRunner.createQueryRunner();
-    }
-
     // =========================================================================
     // Representative sample/high/null value coverage per type
     // =========================================================================
@@ -47,20 +44,51 @@ class TestTrinoTypeMapping
     void testRepresentativeDataMapping()
     {
         // Replaces the coverage of the base testDataMappingSmokeTest, which requires
-        // CREATE TABLE through the connector and is skipped for read-only connectors
-        for (TrinoQueryRunner.DataMappingCase dataMappingCase : TrinoQueryRunner.DATA_MAPPING_CASES) {
-            String table = "remote.default.dm_" + dataMappingCase.suffix();
-            String sampleValue = "CAST(" + dataMappingCase.sampleLiteral() + " AS " + dataMappingCase.type() + ")";
-            String highValue = "CAST(" + dataMappingCase.highLiteral() + " AS " + dataMappingCase.type() + ")";
+        // CREATE TABLE through the connector and is skipped for read-only connectors.
+        // One wide fixture keeps the same sample/high/null and predicate coverage in
+        // six remote queries instead of creating and querying one table per type.
+        String columns = TrinoQueryRunner.DATA_MAPPING_CASES.stream()
+                .map(TrinoQueryRunner.DataMappingCase::columnName)
+                .collect(joining(", "));
 
-            assertThat(query("SELECT value FROM " + table + " WHERE id = 1"))
-                    .matches("VALUES " + sampleValue);
-            assertThat(query("SELECT value FROM " + table + " WHERE id = 2"))
-                    .matches("VALUES " + highValue);
-            assertQuery("SELECT id FROM " + table + " WHERE value = " + sampleValue, "VALUES 1");
-            assertQuery("SELECT id FROM " + table + " WHERE value = " + highValue, "VALUES 2");
-            assertQuery("SELECT id FROM " + table + " WHERE value IS NULL", "VALUES 3");
-        }
+        assertThat(query("SELECT " + columns + " FROM remote.default.data_mapping WHERE id = 1"))
+                .matches(dataMappingExpectedRow(TrinoQueryRunner.DataMappingCase::sampleValue));
+        assertThat(query("SELECT " + columns + " FROM remote.default.data_mapping WHERE id = 2"))
+                .matches(dataMappingExpectedRow(TrinoQueryRunner.DataMappingCase::highValue));
+        assertThat(query("SELECT " + columns + " FROM remote.default.data_mapping WHERE id = 3"))
+                .matches(dataMappingExpectedRow(TrinoQueryRunner.DataMappingCase::nullValue));
+
+        assertQuery(
+                dataMappingPredicateQuery(dataMappingCase -> dataMappingCase.columnName() + " = " + dataMappingCase.sampleValue()),
+                dataMappingPredicateExpectedRows(1));
+        assertQuery(
+                dataMappingPredicateQuery(dataMappingCase -> dataMappingCase.columnName() + " = " + dataMappingCase.highValue()),
+                dataMappingPredicateExpectedRows(2));
+        assertQuery(
+                dataMappingPredicateQuery(dataMappingCase -> dataMappingCase.columnName() + " IS NULL"),
+                dataMappingPredicateExpectedRows(3));
+    }
+
+    private static String dataMappingExpectedRow(Function<TrinoQueryRunner.DataMappingCase, String> value)
+    {
+        return "VALUES (" + TrinoQueryRunner.DATA_MAPPING_CASES.stream()
+                .map(value)
+                .collect(joining(", ")) + ")";
+    }
+
+    private static String dataMappingPredicateQuery(Function<TrinoQueryRunner.DataMappingCase, String> predicate)
+    {
+        return "SELECT type_name, id FROM (" + TrinoQueryRunner.DATA_MAPPING_CASES.stream()
+                .map(dataMappingCase -> "SELECT '" + dataMappingCase.suffix() + "' AS type_name, id " +
+                        "FROM remote.default.data_mapping WHERE " + predicate.apply(dataMappingCase))
+                .collect(joining(" UNION ALL ")) + ")";
+    }
+
+    private static String dataMappingPredicateExpectedRows(int id)
+    {
+        return "VALUES " + TrinoQueryRunner.DATA_MAPPING_CASES.stream()
+                .map(dataMappingCase -> "('" + dataMappingCase.suffix() + "', " + id + ")")
+                .collect(joining(", "));
     }
 
     @Test
@@ -74,20 +102,36 @@ class TestTrinoTypeMapping
                     .setTimeZoneKey(TimeZoneKey.getTimeZoneKey(zone))
                     .build();
 
-            assertThat(query(session, "SELECT value FROM remote.default.dm_timestamp_12 WHERE id = 1"))
-                    .matches("VALUES CAST(TIMESTAMP '2020-02-12 15:03:00.123456789012' AS timestamp(12))");
-            assertThat(query(session, "SELECT value FROM remote.default.dm_timestamp_12 WHERE id = 2"))
-                    .matches("VALUES CAST(TIMESTAMP '2199-12-31 23:59:59.999999999999' AS timestamp(12))");
-            assertThat(query(session, "SELECT value FROM remote.default.dm_timestamptz_12 WHERE id = 1"))
-                    .matches("VALUES CAST(TIMESTAMP '2020-02-12 15:03:00.123456789012 +01:00' AS timestamp(12) with time zone)");
-            assertThat(query(session, "SELECT value FROM remote.default.dm_timestamptz_12 WHERE id = 2"))
-                    .matches("VALUES CAST(TIMESTAMP '9999-12-31 23:59:59.999999999999 +12:00' AS timestamp(12) with time zone)");
-            assertThat(query(session, "SELECT value FROM remote.default.dm_timestamptz_3 WHERE id = 1"))
-                    .matches("VALUES CAST(TIMESTAMP '2020-02-12 15:03:00.123 +01:00' AS timestamp(3) with time zone)");
-            assertThat(query(session, "SELECT value FROM remote.default.dm_time_12 WHERE id = 1"))
-                    .matches("VALUES CAST(TIME '15:03:00.123456789012' AS time(12))");
-            assertThat(query(session, "SELECT CAST(x AS VARCHAR) FROM remote.default.test_timetz3"))
-                    .matches("VALUES CAST('10:30:45.123+09:00' AS varchar)");
+            assertThat(query(session,
+                    """
+                    SELECT
+                        sample.value_timestamp_12,
+                        high.value_timestamp_12,
+                        sample.value_timestamptz_12,
+                        high.value_timestamptz_12,
+                        sample.value_timestamptz_3,
+                        timezone(sample.value_timestamptz_3),
+                        timezone(sample.value_timestamptz_12),
+                        sample.value_time_12,
+                        CAST(timetz.x AS VARCHAR)
+                    FROM remote.default.data_mapping sample
+                    CROSS JOIN remote.default.data_mapping high
+                    CROSS JOIN remote.default.test_timetz3 timetz
+                    WHERE sample.id = 1 AND high.id = 2
+                    """))
+                    .matches(
+                            """
+                            VALUES (
+                                CAST(TIMESTAMP '2020-02-12 15:03:00.123456789012' AS timestamp(12)),
+                                CAST(TIMESTAMP '2199-12-31 23:59:59.999999999999' AS timestamp(12)),
+                                CAST(TIMESTAMP '2020-02-12 15:03:00.123456789012 +01:00' AS timestamp(12) with time zone),
+                                CAST(TIMESTAMP '9999-12-31 23:59:59.999999999999 +12:00' AS timestamp(12) with time zone),
+                                CAST(TIMESTAMP '2020-02-12 15:03:00.123 +01:00' AS timestamp(3) with time zone),
+                                CAST('+01:00' AS varchar),
+                                CAST('+01:00' AS varchar),
+                                CAST(TIME '15:03:00.123456789012' AS time(12)),
+                                CAST('10:30:45.123+09:00' AS varchar))
+                            """);
         }
 
         // Typed-bind predicate leg: one representative zone is enough — bound values
@@ -95,9 +139,94 @@ class TestTrinoTypeMapping
         Session kathmandu = Session.builder(getSession())
                 .setTimeZoneKey(TimeZoneKey.getTimeZoneKey("Asia/Kathmandu"))
                 .build();
-        assertQuery(kathmandu, "SELECT id FROM remote.default.dm_timestamp_12 WHERE value = TIMESTAMP '2020-02-12 15:03:00.123456789012'", "VALUES 1");
-        assertQuery(kathmandu, "SELECT id FROM remote.default.dm_timestamptz_12 WHERE value = TIMESTAMP '2020-02-12 15:03:00.123456789012 +01:00'", "VALUES 1");
-        assertQuery(kathmandu, "SELECT id FROM remote.default.dm_timestamptz_3 WHERE value = TIMESTAMP '2020-02-12 15:03:00.123 +01:00'", "VALUES 1");
+        assertQuery(
+                kathmandu,
+                """
+                SELECT id
+                FROM remote.default.data_mapping
+                WHERE value_timestamp_12 = TIMESTAMP '2020-02-12 15:03:00.123456789012'
+                    AND value_timestamptz_12 = TIMESTAMP '2020-02-12 15:03:00.123456789012 +01:00'
+                    AND value_timestamptz_3 = TIMESTAMP '2020-02-12 15:03:00.123 +01:00'
+                """,
+                "VALUES 1");
+    }
+
+    @Test
+    void testTimestampWithTimeZoneDstFold()
+    {
+        String expected =
+                """
+                VALUES
+                    (
+                        1,
+                        CAST(at_timezone(TIMESTAMP '2022-10-30 00:30:00.123 UTC', 'Europe/Warsaw') AS TIMESTAMP(3) WITH TIME ZONE),
+                        CAST('Europe/Warsaw' AS VARCHAR),
+                        CAST(at_timezone(TIMESTAMP '2022-10-30 00:30:00.123456789012 UTC', 'Europe/Warsaw') AS TIMESTAMP(12) WITH TIME ZONE),
+                        CAST('Europe/Warsaw' AS VARCHAR)
+                    ),
+                    (
+                        2,
+                        CAST(at_timezone(TIMESTAMP '2022-10-30 01:30:00.123 UTC', 'Europe/Warsaw') AS TIMESTAMP(3) WITH TIME ZONE),
+                        CAST('Europe/Warsaw' AS VARCHAR),
+                        CAST(at_timezone(TIMESTAMP '2022-10-30 01:30:00.123456789012 UTC', 'Europe/Warsaw') AS TIMESTAMP(12) WITH TIME ZONE),
+                        CAST('Europe/Warsaw' AS VARCHAR)
+                    )
+                """;
+
+        for (String zone : List.of("UTC", "Asia/Kathmandu", "Europe/Warsaw")) {
+            Session session = Session.builder(getSession())
+                    .setTimeZoneKey(TimeZoneKey.getTimeZoneKey(zone))
+                    .build();
+            assertThat(query(session,
+                    "SELECT id, p3, timezone(p3), p12, timezone(p12) " +
+                            "FROM remote.default.test_tstz_dst_fold ORDER BY id"))
+                    .matches(expected);
+        }
+
+        assertThat(query(
+                "SELECT id FROM remote.default.test_tstz_dst_fold " +
+                        "WHERE p3 = at_timezone(TIMESTAMP '2022-10-30 01:30:00.123 UTC', 'Europe/Warsaw')"))
+                .isFullyPushedDown()
+                .matches("VALUES 2");
+        assertThat(query(
+                "SELECT id FROM remote.default.test_tstz_dst_fold " +
+                        "WHERE p12 = at_timezone(TIMESTAMP '2022-10-30 01:30:00.123456789012 UTC', 'Europe/Warsaw')"))
+                .isFullyPushedDown()
+                .matches("VALUES 2");
+    }
+
+    @Test
+    void testNestedTimestampWithTimeZoneDstFold()
+    {
+        String earlier = "CAST(at_timezone(TIMESTAMP '2022-10-30 00:30:00.123456789012 UTC', 'Europe/Warsaw') AS TIMESTAMP(12) WITH TIME ZONE)";
+        String later = "CAST(at_timezone(TIMESTAMP '2022-10-30 01:30:00.123456789012 UTC', 'Europe/Warsaw') AS TIMESTAMP(12) WITH TIME ZONE)";
+
+        assertThat(query(
+                "SELECT value, timezone(value) FROM remote.default.test_nested_tstz_dst_fold " +
+                        "CROSS JOIN UNNEST(array_value) WITH ORDINALITY AS t(value, position) ORDER BY position"))
+                .ordered()
+                .matches("VALUES (" + earlier + ", CAST('Europe/Warsaw' AS VARCHAR)), (" + later + ", CAST('Europe/Warsaw' AS VARCHAR))");
+        assertThat(query(
+                "SELECT element_at(map_value, 'earlier'), timezone(element_at(map_value, 'earlier')), " +
+                        "element_at(map_value, 'later'), timezone(element_at(map_value, 'later')) " +
+                        "FROM remote.default.test_nested_tstz_dst_fold"))
+                .matches("VALUES (" + earlier + ", CAST('Europe/Warsaw' AS VARCHAR), " + later + ", CAST('Europe/Warsaw' AS VARCHAR))");
+        assertThat(query(
+                "SELECT row_value.earlier, timezone(row_value.earlier), row_value.later, timezone(row_value.later) " +
+                        "FROM remote.default.test_nested_tstz_dst_fold"))
+                .matches("VALUES (" + earlier + ", CAST('Europe/Warsaw' AS VARCHAR), " + later + ", CAST('Europe/Warsaw' AS VARCHAR))");
+    }
+
+    @Test
+    void testTimestampWithTimeZoneHistoricalRegionOffset()
+    {
+        String value = "CAST(at_timezone(TIMESTAMP '1890-01-01 00:00:00.000 UTC', 'Europe/Paris') AS TIMESTAMP(3) WITH TIME ZONE)";
+
+        assertThat(query("SELECT value, timezone(value) FROM remote.default.test_tstz_historical_zone"))
+                .matches("VALUES (" + value + ", CAST('Europe/Paris' AS VARCHAR))");
+        assertThat(query("SELECT value FROM remote.default.test_tstz_historical_zone WHERE value = " + value))
+                .isFullyPushedDown()
+                .matches("VALUES " + value);
     }
 
     // =========================================================================
@@ -747,6 +876,37 @@ class TestTrinoTypeMapping
                 SELECT CAST(unsupported_col.x AS VARCHAR)
                 FROM remote.default.test_nested_unsupported_row
                 """).getOnlyValue()).isEqualTo("1 00:00:00.000");
+    }
+
+    @Test
+    void testOpaqueUnsupportedTypeConvertsToVarchar()
+    {
+        MaterializedResult result = computeActual("DESCRIBE remote.default.test_unsupported_color");
+        assertThat(result.getMaterializedRows()).anySatisfy(row -> {
+            assertThat(row.getField(0)).isEqualTo("x");
+            assertThat(row.getField(1)).isEqualTo("varchar");
+        });
+    }
+
+    @Test
+    void testTransportBackedTypesDoNotFallBackToVarchar()
+    {
+        assertDescribeColumnType("test_hyperloglog", "x", "HyperLogLog");
+        assertDescribeColumnType("test_qdigest", "x", "qdigest(bigint)");
+        assertDescribeColumnType("test_tdigest", "x", "tdigest");
+        assertDescribeColumnType("test_setdigest", "x", "setdigest");
+        assertDescribeColumnType("test_nested_unsupported_array", "unsupported_col", "array(time(3) with time zone)");
+        assertDescribeColumnType("test_nested_unsupported_map", "unsupported_col", "map(varchar(8), interval day to second)");
+        assertDescribeColumnType("test_nested_unsupported_row", "unsupported_col", "row(\"x\" interval day to second)");
+    }
+
+    private void assertDescribeColumnType(String tableName, String columnName, String expectedType)
+    {
+        MaterializedResult result = computeActual("DESCRIBE remote.default." + tableName);
+        assertThat(result.getMaterializedRows()).anySatisfy(row -> {
+            assertThat(row.getField(0)).isEqualTo(columnName);
+            assertThat(row.getField(1).toString()).isEqualToIgnoringCase(expectedType);
+        });
     }
 
     // =========================================================================

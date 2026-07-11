@@ -19,15 +19,23 @@ mvn clean verify -DskipTests
 mvn test -Dair.check.skip-all=true
 ```
 
+For a lighter local edit/test loop, use the fast-test wrapper. It skips checks
+that are still run by the full build and limits the test JVM heap to 2 GB:
+
+```bash
+testing/fast-test.sh -Dtest=TestTrinoConnectorTest
+```
+
+Additional Maven options are passed through. This wrapper is only for local
+iteration; run `mvn -B clean verify` before submitting a change. Override the
+heap when needed with `TRINO_FAST_TEST_JVM_SIZE`.
+
 ## Test Suites
 
 | Test class | Coverage |
 |------------|----------|
 | `TestTrinoTypeParser` | Type name parsing |
-| `TestTrinoTypeMapping` | Type mapping and transport modes |
-| `TestTrinoUnsupportedTypeHandling` | Unsupported type fallback |
-| `TestTrinoConnectorTest` | Connector contract tests |
-| `TestTrinoConnectorIntegration` | Integration tests |
+| `TestTrinoConnectorTest` | Base JDBC contract, integration, type mapping, and unsupported-type fallback |
 
 ## Local Docker Environment
 

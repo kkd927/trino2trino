@@ -8,9 +8,16 @@ remote Delta smoke test.
 The probe starts two Trino containers:
 
 - local Trino at the version from `pom.xml`, with the locally built
-  `target/trino-trino-<version>` plugin mounted
+  `target/trino-trino-<version>` plugin mounted and no unrelated connector
+  plugins loaded
 - remote Trino at the version passed to `run.sh`, exposing `tpch` and `memory`
-  catalogs
+  catalogs and loading only those two connector plugins
+
+Each container is limited to 1536 MiB of memory and two CPUs by default. The
+limits can be adjusted with `REMOTE_VERSION_SMOKE_MEMORY_LIMIT` and
+`REMOTE_VERSION_SMOKE_CPU_LIMIT`. Readiness polling uses the lightweight
+`/v1/info` endpoint instead of starting a CLI query for every attempt, and
+related assertions are batched to avoid repeatedly starting the Trino CLI JVM.
 
 Run after building the plugin:
 

@@ -133,7 +133,7 @@ final class TrinoReadMappingFactory
         return ColumnMapping.longMapping(
                 timeType,
                 (rs, idx) -> TemporalTransportCodec.parseTimeToPicos(rs.getString(idx)),
-                TemporalTransportCodec.timeWriteFunction(timeType),
+                TemporalTransportCodec.timeTransportWriteFunction(timeType),
                 FULL_PUSHDOWN);
     }
 
@@ -142,10 +142,10 @@ final class TrinoReadMappingFactory
         int timestampPrecision = extractTemporalPrecision(typeHandle, typeName, 3);
         if (normalizedTypeName.startsWith("timestamp") && normalizedTypeName.contains("with time zone")) {
             Type resolvedType = logicalType == null ? createTimestampWithTimeZoneType(timestampPrecision) : logicalType;
-            if (resolvedType instanceof TimestampWithTimeZoneType timestampWithTimeZoneType && timestampWithTimeZoneType.getPrecision() > 9) {
+            if (resolvedType instanceof TimestampWithTimeZoneType timestampWithTimeZoneType) {
                 return Optional.of(varcharTransportColumnMapping(timestampWithTimeZoneType));
             }
-            return toTimestampWithTimeZoneMapping(timestampPrecision);
+            return Optional.empty();
         }
 
         Type resolvedType = logicalType == null ? createTimestampType(timestampPrecision) : logicalType;
@@ -159,10 +159,10 @@ final class TrinoReadMappingFactory
     {
         int precision = extractTemporalPrecision(typeHandle, typeName, 3);
         Type resolvedType = logicalType == null ? createTimestampWithTimeZoneType(precision) : logicalType;
-        if (resolvedType instanceof TimestampWithTimeZoneType timestampWithTimeZoneType && timestampWithTimeZoneType.getPrecision() > 9) {
+        if (resolvedType instanceof TimestampWithTimeZoneType timestampWithTimeZoneType) {
             return Optional.of(varcharTransportColumnMapping(timestampWithTimeZoneType));
         }
-        return toTimestampWithTimeZoneMapping(precision);
+        return Optional.empty();
     }
 
     private Optional<ColumnMapping> timeWithTimeZoneColumnMapping(JdbcTypeHandle typeHandle, String typeName, Type logicalType)
@@ -173,23 +173,6 @@ final class TrinoReadMappingFactory
             return Optional.of(varcharTransportColumnMapping(timeWithTimeZoneType));
         }
         return Optional.empty();
-    }
-
-    private Optional<ColumnMapping> toTimestampWithTimeZoneMapping(int precision)
-    {
-        TimestampWithTimeZoneType type = createTimestampWithTimeZoneType(precision);
-        if (precision <= TimestampWithTimeZoneType.MAX_SHORT_PRECISION) {
-            return Optional.of(ColumnMapping.longMapping(
-                    type,
-                    (rs, idx) -> TemporalTransportCodec.parseShortTimestampWithTimeZone(rs.getString(idx)),
-                    TemporalTransportCodec.shortTimestampWithTimeZoneTransportWriteFunction(type),
-                    TrinoTypeClassifier.transportPredicatePushdownController(type)));
-        }
-        return Optional.of(ColumnMapping.objectMapping(
-                type,
-                ObjectReadFunction.of(LongTimestampWithTimeZone.class, (rs, idx) -> TemporalTransportCodec.parseLongTimestampWithTimeZone(rs.getString(idx))),
-                TemporalTransportCodec.longTimestampWithTimeZoneTransportWriteFunction(type),
-                TrinoTypeClassifier.transportPredicatePushdownController(type)));
     }
 
     private Optional<ColumnMapping> transportFallbackColumnMapping(Type logicalType)
@@ -237,14 +220,14 @@ final class TrinoReadMappingFactory
             if (timestampWithTimeZoneType.isShort()) {
                 return ColumnMapping.longMapping(
                         timestampWithTimeZoneType,
-                        (rs, idx) -> TemporalTransportCodec.parseShortTimestampWithTimeZone(rs.getString(idx)),
-                        TemporalTransportCodec.shortTimestampWithTimeZoneTransportWriteFunction(timestampWithTimeZoneType),
+                        (rs, idx) -> TimestampWithTimeZoneTransport.parseShortTimestampWithTimeZone(rs.getString(idx)),
+                        TimestampWithTimeZoneTransport.shortPredicateWriteFunction(timestampWithTimeZoneType),
                         predicatePushdownController);
             }
             return ColumnMapping.objectMapping(
                     timestampWithTimeZoneType,
-                    ObjectReadFunction.of(LongTimestampWithTimeZone.class, (rs, idx) -> TemporalTransportCodec.parseLongTimestampWithTimeZone(rs.getString(idx))),
-                    TemporalTransportCodec.longTimestampWithTimeZoneTransportWriteFunction(timestampWithTimeZoneType),
+                    ObjectReadFunction.of(LongTimestampWithTimeZone.class, (rs, idx) -> TimestampWithTimeZoneTransport.parseLongTimestampWithTimeZone(rs.getString(idx))),
+                    TimestampWithTimeZoneTransport.longPredicateWriteFunction(timestampWithTimeZoneType),
                     predicatePushdownController);
         }
         if (logicalType instanceof TimeWithTimeZoneType timeWithTimeZoneType) {

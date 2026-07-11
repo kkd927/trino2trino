@@ -98,7 +98,7 @@ class TestTrinoRemoteSqlRenderer
                         List.of(cast, new Constant(0L, TIMESTAMP_MILLIS))),
                 Map.of("log_timestamp", column("log_timestamp", VARCHAR_TYPE_HANDLE, VARCHAR)));
 
-        assertThat(rewritten.expression()).isEqualTo("(CAST(\"log_timestamp\" AS timestamp(3)) >= ?)");
+        assertThat(rewritten.expression()).isEqualTo("(CAST(\"log_timestamp\" AS timestamp(3)) >= CAST(? AS timestamp(3)))");
         assertThat(rewritten.parameters()).hasSize(1);
         assertThat(rewritten.parameters().getFirst().getType()).isEqualTo(TIMESTAMP_MILLIS);
         assertThat(rewritten.parameters().getFirst().getValue()).contains(0L);
@@ -150,7 +150,7 @@ class TestTrinoRemoteSqlRenderer
                 TrinoRemoteCapabilities.forTestingLegacyCharToVarcharCast(Set.of("concat")));
 
         assertThat(rewritten.expression())
-                .isEqualTo("concat(CAST(trim(TRAILING ' ' FROM \"c\") AS varchar), ?)");
+                .isEqualTo("concat(CAST(trim(TRAILING ' ' FROM \"c\") AS varchar), CAST(? AS varchar))");
         assertThat(rewritten.parameters()).hasSize(1);
     }
 
@@ -212,7 +212,7 @@ class TestTrinoRemoteSqlRenderer
                         "path", column("path", VARCHAR_TYPE_HANDLE, VARCHAR),
                         "log_timestamp", column("log_timestamp", VARCHAR_TYPE_HANDLE, VARCHAR)));
 
-        assertThat(rewritten.expression()).isEqualTo("(regexp_like(\"path\", ?) AND (date_trunc(?, CAST(\"log_timestamp\" AS timestamp(3))) = CAST(? AS timestamp(3))))");
+        assertThat(rewritten.expression()).isEqualTo("(regexp_like(\"path\", CAST(? AS varchar)) AND (date_trunc(CAST(? AS varchar), CAST(\"log_timestamp\" AS timestamp(3))) = CAST(CAST(? AS varchar) AS timestamp(3))))");
         assertThat(rewritten.parameters()).hasSize(3);
     }
 
@@ -233,11 +233,11 @@ class TestTrinoRemoteSqlRenderer
                 List.of(new Variable("tags", new ArrayType(VARCHAR)), new Constant(1L, BIGINT)));
 
         assertThat(render(inPredicate, Map.of("regionkey", column("regionkey"))).expression())
-                .isEqualTo("(\"regionkey\" IN (?, ?))");
+                .isEqualTo("(\"regionkey\" IN (CAST(? AS bigint), CAST(? AS bigint)))");
         assertThat(render(likePredicate, Map.of("name", column("name", VARCHAR_TYPE_HANDLE, VARCHAR))).expression())
-                .isEqualTo("(\"name\" LIKE ?)");
+                .isEqualTo("(\"name\" LIKE CAST(? AS varchar))");
         assertThat(render(subscript, Map.of("tags", column("tags", VARCHAR_TYPE_HANDLE, new ArrayType(VARCHAR)))).expression())
-                .isEqualTo("\"tags\"[?]");
+                .isEqualTo("\"tags\"[CAST(? AS bigint)]");
     }
 
     @Test

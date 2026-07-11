@@ -86,8 +86,8 @@ final class TrinoTypeClassifier
         if (type instanceof TimestampType timestampType) {
             return timestampType.getPrecision() > 9;
         }
-        if (type instanceof TimestampWithTimeZoneType timestampWithTimeZoneType) {
-            return timestampWithTimeZoneType.getPrecision() > 9;
+        if (type instanceof TimestampWithTimeZoneType) {
+            return true;
         }
         if (type instanceof TimeWithTimeZoneType) {
             return true;

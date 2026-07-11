@@ -28,6 +28,7 @@ import io.trino.plugin.jdbc.JdbcColumnHandle;
 import io.trino.plugin.jdbc.JdbcExpression;
 import io.trino.plugin.jdbc.JdbcJoinCondition;
 import io.trino.plugin.jdbc.JdbcJoinPushdownUtil;
+import io.trino.plugin.jdbc.JdbcNamedRelationHandle;
 import io.trino.plugin.jdbc.JdbcOutputTableHandle;
 import io.trino.plugin.jdbc.JdbcSortItem;
 import io.trino.plugin.jdbc.JdbcSplit;
@@ -66,18 +67,10 @@ import io.trino.spi.expression.StandardFunctions;
 import io.trino.spi.statistics.ColumnStatistics;
 import io.trino.spi.statistics.Estimate;
 import io.trino.spi.statistics.TableStatistics;
-import io.trino.spi.type.CharType;
-import io.trino.spi.type.DateType;
 import io.trino.spi.type.DecimalType;
-import io.trino.spi.type.NumberType;
-import io.trino.spi.type.TimeType;
-import io.trino.spi.type.TimeWithTimeZoneType;
-import io.trino.spi.type.TimestampType;
 import io.trino.spi.type.TimestampWithTimeZoneType;
 import io.trino.spi.type.Type;
 import io.trino.spi.type.TypeManager;
-import io.trino.spi.type.VarbinaryType;
-import io.trino.spi.type.VarcharType;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -99,16 +92,8 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static io.trino.matching.Pattern.typeOf;
-import static io.trino.plugin.jdbc.StandardColumnMappings.longDecimalWriteFunction;
-import static io.trino.plugin.jdbc.StandardColumnMappings.shortDecimalWriteFunction;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.type.BigintType.BIGINT;
-import static io.trino.spi.type.BooleanType.BOOLEAN;
-import static io.trino.spi.type.DoubleType.DOUBLE;
-import static io.trino.spi.type.IntegerType.INTEGER;
-import static io.trino.spi.type.RealType.REAL;
-import static io.trino.spi.type.SmallintType.SMALLINT;
-import static io.trino.spi.type.TinyintType.TINYINT;
 import static java.lang.String.format;
 
 /**
@@ -442,16 +427,15 @@ public class TrinoClient
             return TableStatistics.builder().build();
         }
 
-        List<JdbcColumnHandle> columns = handle.getColumns().orElse(List.of());
-        if (columns.isEmpty()) {
-            return TableStatistics.builder().build();
-        }
-
-        String statsQuery = "SHOW STATS FOR " + quoted(handle.getRequiredNamedRelation().getRemoteTableName());
-        try (Connection connection = getConnection(session)) {
-            logRemoteVersionOnce(connection);
-            try (PreparedStatement statement = connection.prepareStatement(statsQuery);
+        JdbcNamedRelationHandle relation = handle.getRequiredNamedRelation();
+        String statsQuery = "SHOW STATS FOR " + quoted(relation.getRemoteTableName());
+        try {
+            List<JdbcColumnHandle> columns = handle.getColumns()
+                    .orElseGet(() -> getColumns(session, relation.getSchemaTableName(), relation.getRemoteTableName()));
+            try (Connection connection = getConnection(session);
+                    PreparedStatement statement = connection.prepareStatement(statsQuery);
                     ResultSet resultSet = statement.executeQuery()) {
+                logRemoteVersionOnce(connection);
                 TableStatistics.Builder tableStatistics = TableStatistics.builder();
                 while (resultSet.next()) {
                     String columnName = resultSet.getString("column_name");
@@ -503,72 +487,8 @@ public class TrinoClient
     {
         // JDBC query builders use write mappings for SELECT predicate parameter binding.
         // Keep those mappings available while blocking data-changing operations separately.
-        if (type == BOOLEAN) {
-            return WriteMapping.booleanMapping("boolean", (statement, index, value) -> statement.setBoolean(index, value));
-        }
-        if (type == TINYINT) {
-            return WriteMapping.longMapping("tinyint", (statement, index, value) -> statement.setByte(index, (byte) value));
-        }
-        if (type == SMALLINT) {
-            return WriteMapping.longMapping("smallint", (statement, index, value) -> statement.setShort(index, (short) value));
-        }
-        if (type == INTEGER) {
-            return WriteMapping.longMapping("integer", (statement, index, value) -> statement.setInt(index, (int) value));
-        }
-        if (type == BIGINT) {
-            return WriteMapping.longMapping("bigint", (statement, index, value) -> statement.setLong(index, value));
-        }
-        if (type == REAL) {
-            return WriteMapping.longMapping("real", (statement, index, value) -> statement.setFloat(index, Float.intBitsToFloat((int) value)));
-        }
-        if (type == DOUBLE) {
-            return WriteMapping.doubleMapping("double", (statement, index, value) -> statement.setDouble(index, value));
-        }
-        if (type instanceof DecimalType decimalType) {
-            String dataType = "decimal(" + decimalType.getPrecision() + "," + decimalType.getScale() + ")";
-            if (decimalType.isShort()) {
-                return WriteMapping.longMapping(dataType, shortDecimalWriteFunction(decimalType));
-            }
-            return WriteMapping.objectMapping(dataType, longDecimalWriteFunction(decimalType));
-        }
-        if (type instanceof NumberType) {
-            return TrinoNumberCodec.numberWriteMapping();
-        }
-        if (type instanceof CharType || type instanceof VarcharType) {
-            return WriteMapping.sliceMapping("varchar", (statement, index, value) -> statement.setString(index, value.toStringUtf8()));
-        }
-        if (type instanceof VarbinaryType) {
-            return WriteMapping.sliceMapping("varbinary", (statement, index, value) -> statement.setBytes(index, value.getBytes()));
-        }
-        if (type instanceof DateType) {
-            return WriteMapping.longMapping("date", io.trino.plugin.jdbc.StandardColumnMappings.dateWriteFunctionUsingLocalDate());
-        }
-        if (type instanceof TimeType timeType) {
-            // StandardColumnMappings.timeWriteFunction binds untyped setObject(LocalTime),
-            // which the Trino JDBC driver rejects
-            return WriteMapping.longMapping("time(" + timeType.getPrecision() + ")", TemporalTransportCodec.timeWriteFunction(timeType));
-        }
-        if (type instanceof TimestampType timestampType) {
-            if (timestampType.isShort()) {
-                return WriteMapping.longMapping("timestamp(" + timestampType.getPrecision() + ")", io.trino.plugin.jdbc.StandardColumnMappings.timestampWriteFunction(timestampType));
-            }
-            if (timestampType.getPrecision() <= 9) {
-                return WriteMapping.objectMapping(
-                        "timestamp(" + timestampType.getPrecision() + ")",
-                        io.trino.plugin.jdbc.StandardColumnMappings.longTimestampWriteFunction(timestampType, timestampType.getPrecision()));
-            }
-            return TemporalTransportCodec.timestampWriteMapping(timestampType);
-        }
-        if (type instanceof TimestampWithTimeZoneType timestampWithTimeZoneType) {
-            return TemporalTransportCodec.timestampWithTimeZoneWriteMapping(timestampWithTimeZoneType);
-        }
-        if (type instanceof TimeWithTimeZoneType timeWithTimeZoneType) {
-            return TemporalTransportCodec.timeWithTimeZoneWriteMapping(timeWithTimeZoneType);
-        }
-        if (TrinoTypeClassifier.isIntervalYearToMonthType(type) || TrinoTypeClassifier.isIntervalDayToSecondType(type)) {
-            return TemporalTransportCodec.intervalWriteMapping(type);
-        }
-        throw new TrinoException(NOT_SUPPORTED, "Unsupported parameter type for pushdown: " + type);
+        return TrinoParameterBindingFactory.createWriteMapping(type)
+                .orElseThrow(() -> new TrinoException(NOT_SUPPORTED, "Unsupported parameter type for pushdown: " + type));
     }
 
     @Override
@@ -611,6 +531,12 @@ public class TrinoClient
     public void setColumnType(ConnectorSession session, JdbcTableHandle handle, JdbcColumnHandle column, Type type)
     {
         throw new TrinoException(NOT_SUPPORTED, "This connector does not support setting column types");
+    }
+
+    @Override
+    public void dropNotNullConstraint(ConnectorSession session, JdbcTableHandle handle, JdbcColumnHandle column)
+    {
+        throw new TrinoException(NOT_SUPPORTED, "This connector does not support dropping NOT NULL constraints");
     }
 
     @Override
@@ -695,7 +621,9 @@ public class TrinoClient
             String alias = quoted(column.getColumnName());
             selectItems.add(switch (transportKind) {
                 case NATIVE -> reference + " AS " + alias;
-                case VARCHAR_CAST -> "CAST(" + reference + " AS VARCHAR) AS " + alias;
+                case VARCHAR_CAST -> (logicalType instanceof TimestampWithTimeZoneType
+                        ? TimestampWithTimeZoneTransport.readExpression(reference)
+                        : "CAST(" + reference + " AS VARCHAR)") + " AS " + alias;
                 case VARBINARY_CAST -> "CAST(" + reference + " AS VARBINARY) AS " + alias;
                 case JSON_CAST -> "json_format(CAST(" + jsonTransportHelper.buildJsonTransportExpression(reference, logicalType) + " AS JSON)) AS " + alias;
             });

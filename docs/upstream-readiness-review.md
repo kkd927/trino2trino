@@ -87,7 +87,7 @@ PR 제출 전에 필요한 작업은 세 가지다.
 - `testDataMappingSmokeTest` — abort override(TestTrinoConnectorTest.java:508-515)는 base의
   `skipTestUnless(SUPPORTS_CREATE_TABLE)` skip과 중복이라 삭제(바이트코드 확인).
   base 테스트는 커넥터 경유 CREATE라 원격 fixture로 우회 불가. 잃는 커버리지는 새 클래스
-  신설 대신 **기존 `TestTrinoTypeMapping`(68개 테스트)에 보강** — 대표 타입 sample/high value
+  신설 대신 integration suite가 상속하는 **`AbstractTestTrinoTypeMapping`에 보강** — 대표 타입 sample/high value
   SELECT + predicate 케이스. 테스트 클래스 1개당 클러스터 2기 기동이라 신설은 지양.
   같은 메서드명 override로 custom을 넣는 것도 금지(base skip 계약 가림)
 - 축소된 베이스 오버라이드 복원 — `newTrinoTable(3-인자, protected non-final)`을

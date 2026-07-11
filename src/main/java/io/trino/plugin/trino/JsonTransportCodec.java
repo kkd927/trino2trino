@@ -269,10 +269,10 @@ final class JsonTransportCodec
         }
         if (type instanceof TimestampWithTimeZoneType timestampWithTimeZoneType) {
             if (timestampWithTimeZoneType.isShort()) {
-                type.writeLong(builder, TemporalTransportCodec.parseShortTimestampWithTimeZone(value));
+                type.writeLong(builder, TimestampWithTimeZoneTransport.parseShortTimestampWithTimeZone(value));
             }
             else {
-                type.writeObject(builder, TemporalTransportCodec.parseLongTimestampWithTimeZone(value));
+                type.writeObject(builder, TimestampWithTimeZoneTransport.parseLongTimestampWithTimeZone(value));
             }
             return;
         }

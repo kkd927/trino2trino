@@ -37,7 +37,6 @@ import io.trino.spi.type.DateType;
 import io.trino.spi.type.DecimalType;
 import io.trino.spi.type.DoubleType;
 import io.trino.spi.type.IntegerType;
-import io.trino.spi.type.MapType;
 import io.trino.spi.type.NumberType;
 import io.trino.spi.type.RealType;
 import io.trino.spi.type.RowType;
@@ -289,16 +288,7 @@ final class TrinoRemoteSqlRenderer
             return Optional.of(new ParameterizedExpression(identifierQuote.apply(column.getColumnName()), List.of()));
         }
         if (expression instanceof Constant constant) {
-            if (constant.getValue() == null) {
-                return Optional.of(new ParameterizedExpression("CAST(NULL AS " + typeName(constant.getType()) + ")", List.of()));
-            }
-            if (isComplexType(constant.getType())) {
-                // Handle-less QueryParameters bind through toWriteMapping, which has no
-                // path for complex values, so delegating would fail at scan time.
-                // Fall back to local evaluation instead.
-                return Optional.empty();
-            }
-            return Optional.of(new ParameterizedExpression(bindExpression(constant.getType()), List.of(new QueryParameter(constant.getType(), Optional.of(constant.getValue())))));
+            return TrinoParameterBindingFactory.bindConstant(constant);
         }
         if (expression instanceof FieldDereference fieldDereference) {
             return renderFieldDereference(session, fieldDereference, assignments, capabilities);
@@ -307,19 +297,6 @@ final class TrinoRemoteSqlRenderer
             return renderCall(session, call, assignments, capabilities);
         }
         return Optional.empty();
-    }
-
-    private static String bindExpression(Type type)
-    {
-        if (type instanceof NumberType) {
-            return "CAST(? AS " + NumberType.NAME + ")";
-        }
-        return "?";
-    }
-
-    private static boolean isComplexType(Type type)
-    {
-        return type instanceof ArrayType || type instanceof MapType || type instanceof RowType;
     }
 
     private Optional<ParameterizedExpression> renderFieldDereference(

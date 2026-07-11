@@ -14,7 +14,6 @@
 package io.trino.plugin.trino;
 
 import io.trino.Session;
-import io.trino.plugin.jdbc.BaseJdbcConnectorTest;
 import io.trino.testing.DistributedQueryRunner;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.QueryRunner;
@@ -38,7 +37,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * driver bugs, single-node runner constraints).
  */
 class TestTrinoConnectorTest
-        extends BaseJdbcConnectorTest
+        extends TestTrinoConnectorIntegration
 {
     private DistributedQueryRunner remoteRunner;
 
@@ -47,19 +46,29 @@ class TestTrinoConnectorTest
             throws Exception
     {
         remoteRunner = TrinoQueryRunner.createRemoteQueryRunner();
+        try {
+            createRemoteFixtures();
+            return TrinoQueryRunner.builder(remoteRunner)
+                    .setRemoteCatalog("memory")
+                    .setDefaultSchema("default")
+                    .withComplexTypeTestData()
+                    .withRemoteTpchCatalog()
+                    .withStatisticsDisabledCatalog()
+                    .build();
+        }
+        catch (Exception | Error failure) {
+            TrinoQueryRunner.closeOnFailure(remoteRunner, failure);
+            throw failure;
+        }
+    }
 
+    private void createRemoteFixtures()
+    {
         // Pre-populate remote memory catalog with tpch tables as read-only test fixtures.
         // BaseConnectorTest expects nation/region/orders/customer/lineitem/part/partsupp/supplier
         // to exist and be queryable through the connector's default catalog+schema.
+        TrinoQueryRunner.populateTpchData(remoteRunner);
         Session remoteSession = remoteMemorySession();
-        remoteRunner.execute(remoteSession, "CREATE TABLE nation AS SELECT * FROM tpch.tiny.nation");
-        remoteRunner.execute(remoteSession, "CREATE TABLE region AS SELECT * FROM tpch.tiny.region");
-        remoteRunner.execute(remoteSession, "CREATE TABLE orders AS SELECT * FROM tpch.tiny.orders");
-        remoteRunner.execute(remoteSession, "CREATE TABLE customer AS SELECT * FROM tpch.tiny.customer");
-        remoteRunner.execute(remoteSession, "CREATE TABLE lineitem AS SELECT * FROM tpch.tiny.lineitem");
-        remoteRunner.execute(remoteSession, "CREATE TABLE part AS SELECT * FROM tpch.tiny.part");
-        remoteRunner.execute(remoteSession, "CREATE TABLE partsupp AS SELECT * FROM tpch.tiny.partsupp");
-        remoteRunner.execute(remoteSession, "CREATE TABLE supplier AS SELECT * FROM tpch.tiny.supplier");
         remoteRunner.execute(
                 remoteSession,
                 "CREATE TABLE simple_table AS SELECT * FROM (VALUES BIGINT '1', BIGINT '2') AS t(col)");
@@ -125,11 +134,6 @@ class TestTrinoConnectorTest
                         ('late', CAST(TIME '10:30:45.124 +09:00' AS TIME(3) WITH TIME ZONE))
                 ) AS t(id, time_tz_col)
                 """);
-
-        return TrinoQueryRunner.builder(remoteRunner)
-                .setRemoteCatalog("memory")
-                .setDefaultSchema("default")
-                .build();
     }
 
     @Override
@@ -164,6 +168,26 @@ class TestTrinoConnectorTest
                 .setCatalog("memory")
                 .setSchema("default")
                 .build();
+    }
+
+    @Override
+    protected void assertQueryFails(String sql, String expectedMessageRegex)
+    {
+        super.assertQueryFails(sql, readOnlyFailurePattern(expectedMessageRegex));
+    }
+
+    @Override
+    protected void assertQueryFails(Session session, String sql, String expectedMessageRegex)
+    {
+        super.assertQueryFails(session, sql, readOnlyFailurePattern(expectedMessageRegex));
+    }
+
+    private static String readOnlyFailurePattern(String expectedMessageRegex)
+    {
+        if (expectedMessageRegex.startsWith("This connector does not support")) {
+            return "(?s)(?:" + expectedMessageRegex + "|Access Denied:.*)";
+        }
+        return expectedMessageRegex;
     }
 
     // =========================================================================
@@ -482,13 +506,8 @@ class TestTrinoConnectorTest
     // Architectural overrides -- procedure and runner constraints
     // =========================================================================
 
-    // The execute procedure is inherited from base-jdbc and runs arbitrary SQL,
-    // including writes, on the remote cluster: the connector's SPI-level
-    // read-only enforcement does not apply to it. As with system.query, the
-    // execution boundary for this explicit escape hatch is remote access
-    // control; see the Limitations documentation. The base test bodies require
-    // local DDL and remote UPDATE/DELETE support, so these overrides pin the
-    // same contract against the remote memory catalog.
+    // The procedure is inherited from base-jdbc, but this connector exposes a
+    // read-only surface and denies it before the remote SQL is executed.
     @Test
     @Override
     public void testExecuteProcedure()
@@ -496,14 +515,7 @@ class TestTrinoConnectorTest
         String tableName = "test_execute" + randomNameSuffix();
         String schemaTableName = "memory.default." + tableName;
 
-        assertUpdate("CALL system.execute('CREATE TABLE " + schemaTableName + " (a int)')");
-        try {
-            assertUpdate("CALL system.execute('INSERT INTO " + schemaTableName + " VALUES (1)')");
-            assertThat(computeRemoteActual("SELECT a FROM " + schemaTableName).getOnlyValue()).isEqualTo(1);
-        }
-        finally {
-            assertUpdate("CALL system.execute('DROP TABLE " + schemaTableName + "')");
-        }
+        assertExecuteProcedureDenied("CALL system.execute('CREATE TABLE " + schemaTableName + " (a int)')");
         assertThat(computeRemoteActual("SHOW TABLES FROM memory.default LIKE '" + tableName + "'").getRowCount()).isEqualTo(0);
     }
 
@@ -514,13 +526,39 @@ class TestTrinoConnectorTest
         String tableName = "test_execute" + randomNameSuffix();
         String schemaTableName = "memory.default." + tableName;
 
-        assertUpdate("CALL system.execute('CREATE TABLE " + schemaTableName + " (a int)')");
-        try {
-            assertUpdate("CALL system.execute(query => 'DROP TABLE " + schemaTableName + "')");
-            assertThat(computeRemoteActual("SHOW TABLES FROM memory.default LIKE '" + tableName + "'").getRowCount()).isEqualTo(0);
+        assertExecuteProcedureDenied("CALL system.execute(query => 'CREATE TABLE " + schemaTableName + " (a int)')");
+        assertThat(computeRemoteActual("SHOW TABLES FROM memory.default LIKE '" + tableName + "'").getRowCount()).isEqualTo(0);
+    }
+
+    @Test
+    @Override
+    public void testExecuteProcedureWithInvalidQuery()
+    {
+        assertExecuteProcedureDenied("CALL system.execute('some incorrect syntax')");
+    }
+
+    @Test
+    void testFlushMetadataCacheProcedure()
+    {
+        assertUpdate("CALL system.flush_metadata_cache()");
+    }
+
+    @Test
+    void testDropNotNullConstraintDoesNotMutateRemoteTable()
+    {
+        try (TestTable table = new TestTable(onRemoteDatabase(), "test_not_null", "(value bigint NOT NULL)")) {
+            assertThatThrownBy(() -> computeActual("ALTER TABLE " + table.getName() + " ALTER COLUMN value DROP NOT NULL"))
+                    .hasMessageContaining("Access Denied");
+            assertThat(computeRemoteActual("SELECT is_nullable FROM information_schema.columns " +
+                    "WHERE table_schema = 'default' AND table_name = '" + table.getName() + "' AND column_name = 'value'").getOnlyValue())
+                    .isEqualTo("NO");
         }
-        finally {
-            computeRemoteActual("DROP TABLE IF EXISTS " + schemaTableName);
-        }
+    }
+
+    private void assertExecuteProcedureDenied(String sql)
+    {
+        assertThatThrownBy(() -> computeActual(sql))
+                .hasMessageContaining("Access Denied")
+                .hasMessageContaining("Cannot execute procedure system.execute");
     }
 }

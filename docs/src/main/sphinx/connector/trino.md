@@ -93,7 +93,7 @@ Native scalar reads include:
 - ``number``
 - ``char``, ``varchar``, ``varbinary``
 - ``date``
-- exact ``time(p)``, ``timestamp(p)``, ``timestamp(p) with time zone``
+- exact ``time(p<=9)`` and ``timestamp(p<=9)``
 - ``uuid``, ``json``, ``ipaddress``
 
 Native complex reads are allowed only when every descendant leaf is natively
@@ -111,9 +111,11 @@ Examples:
 Top-level scalar fallback currently covers:
 
 - ``time with time zone``
+- ``timestamp(p) with time zone`` at every precision; the wire value carries
+  the UTC instant and original zone ID separately
 - ``interval year to month``
 - ``interval day to second``
-- high-precision ``time(p)``, ``timestamp(p)``, and ``timestamp(p) with time zone`` when JDBC is not exact
+- high-precision ``time(p)`` and ``timestamp(p)`` when JDBC is not exact
 
 These columns still appear locally as their original logical Trino types.
 
@@ -248,7 +250,7 @@ path enabled. The equivalent catalog session property is
 Pushdown behavior for transport-backed columns is split:
 
 - scalar ``VARCHAR`` transport (``timestamp(p>9)``,
-  ``timestamp with time zone(p>9)``, ``time with time zone``, interval types)
+  ``timestamp(p) with time zone``, ``time with time zone``, interval types)
   keeps tuple-domain predicate pushdown enabled via typed bind expressions such
   as ``CAST(? AS timestamp(12))`` or ``parse_duration(?)``
 - structural ``JSON`` transport remains ``DISABLE_PUSHDOWN``
@@ -264,6 +266,10 @@ column.
 ``getTableStatistics()`` queries remote Trino with ``SHOW STATS FOR <table>`` and
 feeds the result into the local optimizer. If the remote side cannot provide
 statistics, the connector falls back to unknown statistics.
+
+``AUTOMATIC`` join pushdown requires remote column statistics, including the
+distinct-value count for join keys. If the remote catalog only reports a table
+row count, the join remains local.
 
 ## Security
 
@@ -290,10 +296,8 @@ otherwise compatible.
 - ``system.query`` supports only row-returning read queries; statement-level
   writes (DDL, DML, ``CALL``) are rejected before remote execution, and no
   further validation is performed on passthrough SQL
-- ``CALL system.execute(...)`` is inherited from the base JDBC framework and
-  is not covered by the read-only enforcement: it executes arbitrary SQL,
-  including writes, on the remote cluster as the configured connection user;
-  the execution boundary is remote access control
+- ``CALL system.execute(...)`` is inherited from the base JDBC framework but
+  is denied by this connector's read-only access control
 - Remote delegation probes ``CHAR`` to ``VARCHAR`` cast semantics and trims
   legacy remote padding when such casts are pushed down
 - Negative dates (before year 0001) are not preserved correctly through JDBC
