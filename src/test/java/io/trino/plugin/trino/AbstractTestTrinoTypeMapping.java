@@ -13,26 +13,220 @@
  */
 package io.trino.plugin.trino;
 
-import io.trino.testing.AbstractTestQueryFramework;
+import io.trino.Session;
+import io.trino.plugin.jdbc.BaseJdbcConnectorTest;
+import io.trino.spi.type.TimeZoneKey;
 import io.trino.testing.MaterializedResult;
-import io.trino.testing.QueryRunner;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+import java.util.function.Function;
+
+import static java.util.stream.Collectors.joining;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Tests type mapping reads through the trino2trino connector.
  * Verifies that pre-created remote tables with various types are
  * correctly read through the JDBC federation layer.
+ *
+ * <p>This is inherited by the integration suite so all integration and type
+ * mapping assertions share one local/remote query-runner pair.
  */
-class TestTrinoTypeMapping
-        extends AbstractTestQueryFramework
+abstract class AbstractTestTrinoTypeMapping
+        extends BaseJdbcConnectorTest
 {
-    @Override
-    protected QueryRunner createQueryRunner()
-            throws Exception
+    // =========================================================================
+    // Representative sample/high/null value coverage per type
+    // =========================================================================
+
+    @Test
+    void testRepresentativeDataMapping()
     {
-        return TrinoQueryRunner.createQueryRunner();
+        // Replaces the coverage of the base testDataMappingSmokeTest, which requires
+        // CREATE TABLE through the connector and is skipped for read-only connectors.
+        // One wide fixture keeps the same sample/high/null and predicate coverage in
+        // six remote queries instead of creating and querying one table per type.
+        String columns = TrinoQueryRunner.DATA_MAPPING_CASES.stream()
+                .map(TrinoQueryRunner.DataMappingCase::columnName)
+                .collect(joining(", "));
+
+        assertThat(query("SELECT " + columns + " FROM remote.default.data_mapping WHERE id = 1"))
+                .matches(dataMappingExpectedRow(TrinoQueryRunner.DataMappingCase::sampleValue));
+        assertThat(query("SELECT " + columns + " FROM remote.default.data_mapping WHERE id = 2"))
+                .matches(dataMappingExpectedRow(TrinoQueryRunner.DataMappingCase::highValue));
+        assertThat(query("SELECT " + columns + " FROM remote.default.data_mapping WHERE id = 3"))
+                .matches(dataMappingExpectedRow(TrinoQueryRunner.DataMappingCase::nullValue));
+
+        assertQuery(
+                dataMappingPredicateQuery(dataMappingCase -> dataMappingCase.columnName() + " = " + dataMappingCase.sampleValue()),
+                dataMappingPredicateExpectedRows(1));
+        assertQuery(
+                dataMappingPredicateQuery(dataMappingCase -> dataMappingCase.columnName() + " = " + dataMappingCase.highValue()),
+                dataMappingPredicateExpectedRows(2));
+        assertQuery(
+                dataMappingPredicateQuery(dataMappingCase -> dataMappingCase.columnName() + " IS NULL"),
+                dataMappingPredicateExpectedRows(3));
+    }
+
+    private static String dataMappingExpectedRow(Function<TrinoQueryRunner.DataMappingCase, String> value)
+    {
+        return "VALUES (" + TrinoQueryRunner.DATA_MAPPING_CASES.stream()
+                .map(value)
+                .collect(joining(", ")) + ")";
+    }
+
+    private static String dataMappingPredicateQuery(Function<TrinoQueryRunner.DataMappingCase, String> predicate)
+    {
+        return "SELECT type_name, id FROM (" + TrinoQueryRunner.DATA_MAPPING_CASES.stream()
+                .map(dataMappingCase -> "SELECT '" + dataMappingCase.suffix() + "' AS type_name, id " +
+                        "FROM remote.default.data_mapping WHERE " + predicate.apply(dataMappingCase))
+                .collect(joining(" UNION ALL ")) + ")";
+    }
+
+    private static String dataMappingPredicateExpectedRows(int id)
+    {
+        return "VALUES " + TrinoQueryRunner.DATA_MAPPING_CASES.stream()
+                .map(dataMappingCase -> "('" + dataMappingCase.suffix() + "', " + id + ")")
+                .collect(joining(", "));
+    }
+
+    @Test
+    void testTemporalTransportAcrossSessionTimeZones()
+    {
+        // Temporal transport decodes timestamps from strings; the decoded value must
+        // not depend on the session zone. UTC + a non-hour offset (Kathmandu) + a DST
+        // zone (Warsaw) form the minimal defense line.
+        for (String zone : List.of("UTC", "Asia/Kathmandu", "Europe/Warsaw")) {
+            Session session = Session.builder(getSession())
+                    .setTimeZoneKey(TimeZoneKey.getTimeZoneKey(zone))
+                    .build();
+
+            assertThat(query(session,
+                    """
+                    SELECT
+                        sample.value_timestamp_12,
+                        high.value_timestamp_12,
+                        sample.value_timestamptz_12,
+                        high.value_timestamptz_12,
+                        sample.value_timestamptz_3,
+                        CAST(sample.value_timestamptz_3 AS VARCHAR),
+                        CAST(sample.value_timestamptz_12 AS VARCHAR),
+                        sample.value_time_12,
+                        CAST(timetz.x AS VARCHAR)
+                    FROM remote.default.data_mapping sample
+                    CROSS JOIN remote.default.data_mapping high
+                    CROSS JOIN remote.default.test_timetz3 timetz
+                    WHERE sample.id = 1 AND high.id = 2
+                    """))
+                    .matches(
+                            """
+                            VALUES (
+                                CAST(TIMESTAMP '2020-02-12 15:03:00.123456789012' AS timestamp(12)),
+                                CAST(TIMESTAMP '2199-12-31 23:59:59.999999999999' AS timestamp(12)),
+                                CAST(TIMESTAMP '2020-02-12 15:03:00.123456789012 +01:00' AS timestamp(12) with time zone),
+                                CAST(TIMESTAMP '9999-12-31 23:59:59.999999999999 +12:00' AS timestamp(12) with time zone),
+                                CAST(TIMESTAMP '2020-02-12 15:03:00.123 +01:00' AS timestamp(3) with time zone),
+                                CAST(CAST(TIMESTAMP '2020-02-12 15:03:00.123 +01:00' AS timestamp(3) with time zone) AS varchar),
+                                CAST(CAST(TIMESTAMP '2020-02-12 15:03:00.123456789012 +01:00' AS timestamp(12) with time zone) AS varchar),
+                                CAST(TIME '15:03:00.123456789012' AS time(12)),
+                                CAST('10:30:45.123+09:00' AS varchar))
+                            """);
+        }
+
+        // Typed-bind predicate leg: one representative zone is enough — bound values
+        // carry their own zone/offset, so binding is session-zone independent
+        Session kathmandu = Session.builder(getSession())
+                .setTimeZoneKey(TimeZoneKey.getTimeZoneKey("Asia/Kathmandu"))
+                .build();
+        assertQuery(
+                kathmandu,
+                """
+                SELECT id
+                FROM remote.default.data_mapping
+                WHERE value_timestamp_12 = TIMESTAMP '2020-02-12 15:03:00.123456789012'
+                    AND value_timestamptz_12 = TIMESTAMP '2020-02-12 15:03:00.123456789012 +01:00'
+                    AND value_timestamptz_3 = TIMESTAMP '2020-02-12 15:03:00.123 +01:00'
+                """,
+                "VALUES 1");
+    }
+
+    @Test
+    void testTimestampWithTimeZoneDstFold()
+    {
+        String expected =
+                """
+                VALUES
+                    (
+                        1,
+                        CAST(at_timezone(TIMESTAMP '2022-10-30 00:30:00.123 UTC', 'Europe/Warsaw') AS TIMESTAMP(3) WITH TIME ZONE),
+                        CAST(CAST(at_timezone(TIMESTAMP '2022-10-30 00:30:00.123 UTC', 'Europe/Warsaw') AS TIMESTAMP(3) WITH TIME ZONE) AS VARCHAR),
+                        CAST(at_timezone(TIMESTAMP '2022-10-30 00:30:00.123456789012 UTC', 'Europe/Warsaw') AS TIMESTAMP(12) WITH TIME ZONE),
+                        CAST(CAST(at_timezone(TIMESTAMP '2022-10-30 00:30:00.123456789012 UTC', 'Europe/Warsaw') AS TIMESTAMP(12) WITH TIME ZONE) AS VARCHAR)
+                    ),
+                    (
+                        2,
+                        CAST(at_timezone(TIMESTAMP '2022-10-30 01:30:00.123 UTC', 'Europe/Warsaw') AS TIMESTAMP(3) WITH TIME ZONE),
+                        CAST(CAST(at_timezone(TIMESTAMP '2022-10-30 01:30:00.123 UTC', 'Europe/Warsaw') AS TIMESTAMP(3) WITH TIME ZONE) AS VARCHAR),
+                        CAST(at_timezone(TIMESTAMP '2022-10-30 01:30:00.123456789012 UTC', 'Europe/Warsaw') AS TIMESTAMP(12) WITH TIME ZONE),
+                        CAST(CAST(at_timezone(TIMESTAMP '2022-10-30 01:30:00.123456789012 UTC', 'Europe/Warsaw') AS TIMESTAMP(12) WITH TIME ZONE) AS VARCHAR)
+                    )
+                """;
+
+        for (String zone : List.of("UTC", "Asia/Kathmandu", "Europe/Warsaw")) {
+            Session session = Session.builder(getSession())
+                    .setTimeZoneKey(TimeZoneKey.getTimeZoneKey(zone))
+                    .build();
+            assertThat(query(session,
+                    "SELECT id, p3, CAST(p3 AS VARCHAR), p12, CAST(p12 AS VARCHAR) " +
+                            "FROM remote.default.test_tstz_dst_fold ORDER BY id"))
+                    .matches(expected);
+        }
+
+        assertThat(query(
+                "SELECT id FROM remote.default.test_tstz_dst_fold " +
+                        "WHERE p3 = at_timezone(TIMESTAMP '2022-10-30 01:30:00.123 UTC', 'Europe/Warsaw')"))
+                .isFullyPushedDown()
+                .matches("VALUES 2");
+        assertThat(query(
+                "SELECT id FROM remote.default.test_tstz_dst_fold " +
+                        "WHERE p12 = at_timezone(TIMESTAMP '2022-10-30 01:30:00.123456789012 UTC', 'Europe/Warsaw')"))
+                .isFullyPushedDown()
+                .matches("VALUES 2");
+    }
+
+    @Test
+    void testNestedTimestampWithTimeZoneDstFold()
+    {
+        String earlier = "CAST(at_timezone(TIMESTAMP '2022-10-30 00:30:00.123456789012 UTC', 'Europe/Warsaw') AS TIMESTAMP(12) WITH TIME ZONE)";
+        String later = "CAST(at_timezone(TIMESTAMP '2022-10-30 01:30:00.123456789012 UTC', 'Europe/Warsaw') AS TIMESTAMP(12) WITH TIME ZONE)";
+
+        assertThat(query(
+                "SELECT value, CAST(value AS VARCHAR) FROM remote.default.test_nested_tstz_dst_fold " +
+                        "CROSS JOIN UNNEST(array_value) WITH ORDINALITY AS t(value, position) ORDER BY position"))
+                .ordered()
+                .matches("VALUES (" + earlier + ", CAST(" + earlier + " AS VARCHAR)), (" + later + ", CAST(" + later + " AS VARCHAR))");
+        assertThat(query(
+                "SELECT element_at(map_value, 'earlier'), CAST(element_at(map_value, 'earlier') AS VARCHAR), " +
+                        "element_at(map_value, 'later'), CAST(element_at(map_value, 'later') AS VARCHAR) " +
+                        "FROM remote.default.test_nested_tstz_dst_fold"))
+                .matches("VALUES (" + earlier + ", CAST(" + earlier + " AS VARCHAR), " + later + ", CAST(" + later + " AS VARCHAR))");
+        assertThat(query(
+                "SELECT row_value.earlier, CAST(row_value.earlier AS VARCHAR), row_value.later, CAST(row_value.later AS VARCHAR) " +
+                        "FROM remote.default.test_nested_tstz_dst_fold"))
+                .matches("VALUES (" + earlier + ", CAST(" + earlier + " AS VARCHAR), " + later + ", CAST(" + later + " AS VARCHAR))");
+    }
+
+    @Test
+    void testTimestampWithTimeZoneHistoricalRegionOffset()
+    {
+        String value = "CAST(at_timezone(TIMESTAMP '1890-01-01 00:00:00.000 UTC', 'Europe/Paris') AS TIMESTAMP(3) WITH TIME ZONE)";
+
+        assertThat(query("SELECT value, CAST(value AS VARCHAR) FROM remote.default.test_tstz_historical_zone"))
+                .matches("VALUES (" + value + ", CAST(" + value + " AS VARCHAR))");
+        assertThat(query("SELECT value FROM remote.default.test_tstz_historical_zone WHERE value = " + value))
+                .isFullyPushedDown()
+                .matches("VALUES " + value);
     }
 
     // =========================================================================
@@ -49,16 +243,32 @@ class TestTrinoTypeMapping
     }
 
     @Test
+    void testHistoricalDateRoundTrip()
+    {
+        Session delegationOff = Session.builder(getSession())
+                .setCatalogSessionProperty("remote", "remote_delegation_enabled", "false")
+                .build();
+
+        assertThat(query(
+                delegationOff,
+                "SELECT id, CAST(x AS VARCHAR) FROM remote.default.test_historical_date ORDER BY id"))
+                .ordered()
+                .matches("VALUES " +
+                        "(1, CAST('-0001-01-01' AS VARCHAR)), " +
+                        "(2, CAST('0000-01-01' AS VARCHAR)), " +
+                        "(3, CAST('1582-10-10' AS VARCHAR)), " +
+                        "(4, CAST('10000-01-01' AS VARCHAR))");
+        assertThat(query(
+                delegationOff,
+                "SELECT id FROM remote.default.test_historical_date WHERE x = DATE '-0001-01-01'"))
+                .matches("VALUES 1");
+    }
+
+    @Test
     void testTimestamp6Precision()
     {
-        // Iceberg default: TIMESTAMP(6)
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_timestamp6");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        String value = result.getMaterializedRows().get(0).getField(0).toString();
-        // Verify microsecond precision is preserved (source: 2024-01-15 10:30:45.123456)
-        assertThat(value).contains("2024-01-15");
-        assertThat(value).contains("10:30:45");
-        assertThat(value).contains(".123456");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_timestamp6").getOnlyValue())
+                .isEqualTo("2024-01-15 10:30:45.123456");
     }
 
     @Test
@@ -89,14 +299,47 @@ class TestTrinoTypeMapping
     }
 
     @Test
+    void testArrayOfHistoricalDate()
+    {
+        Session delegationOff = Session.builder(getSession())
+                .setCatalogSessionProperty("remote", "remote_delegation_enabled", "false")
+                .build();
+
+        assertThat(query(
+                delegationOff,
+                "SELECT CAST(x[1] AS VARCHAR), CAST(x[2] AS VARCHAR), CAST(x[3] AS VARCHAR), CAST(x[4] AS VARCHAR) FROM remote.default.test_array_historical_date"))
+                .matches("VALUES (" +
+                        "CAST('-0001-01-01' AS VARCHAR), " +
+                        "CAST('0000-01-01' AS VARCHAR), " +
+                        "CAST('1582-10-10' AS VARCHAR), " +
+                        "CAST('10000-01-01' AS VARCHAR))");
+    }
+
+    @Test
+    void testArrayOfTimePreservesFractionalSeconds()
+    {
+        Session delegationOff = Session.builder(getSession())
+                .setCatalogSessionProperty("remote", "remote_delegation_enabled", "false")
+                .build();
+
+        assertThat(query(
+                delegationOff,
+                "SELECT CAST(p0[1] AS VARCHAR), CAST(p3[1] AS VARCHAR), CAST(p6[1] AS VARCHAR), CAST(p9[1] AS VARCHAR) FROM remote.default.test_array_time_precision"))
+                .matches("VALUES (" +
+                        "CAST('10:30:45' AS VARCHAR), " +
+                        "CAST('10:30:45.123' AS VARCHAR), " +
+                        "CAST('10:30:45.123456' AS VARCHAR), " +
+                        "CAST('10:30:45.123456789' AS VARCHAR))");
+    }
+
+    @Test
     void testMapWithDecimalValues()
     {
         // map(varchar, decimal) — decimal type inside complex type
         MaterializedResult result = computeActual(
                 "SELECT element_at(x, 'price') FROM remote.default.test_map_decimal");
         assertThat(result.getRowCount()).isEqualTo(1);
-        // The value should be 99.99
-        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).contains("99.99");
+        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).isEqualTo("99.99");
     }
 
     // =========================================================================
@@ -124,8 +367,7 @@ class TestTrinoTypeMapping
     {
         MaterializedResult result = computeActual("DESCRIBE remote.default.test_timestamp6");
         String typeStr = result.getMaterializedRows().get(0).getField(1).toString();
-        // Should reflect the precision
-        assertThat(typeStr).contains("timestamp");
+        assertThat(typeStr).isEqualTo("timestamp(6)");
     }
 
     @Test
@@ -297,10 +539,8 @@ class TestTrinoTypeMapping
     @Test
     void testDecimalRoundTrip()
     {
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_decimal ORDER BY x");
-        assertThat(result.getRowCount()).isEqualTo(2);
-        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).contains("123.45");
-        assertThat(result.getMaterializedRows().get(1).getField(0).toString()).contains("999.99");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_decimal ORDER BY x").getOnlyColumnAsSet())
+                .containsExactlyInAnyOrder("123.45", "999.99");
     }
 
     @Test
@@ -334,6 +574,40 @@ class TestTrinoTypeMapping
     }
 
     @Test
+    void testTimePredicatePushdown()
+    {
+        // Regression: the time column mapping used to bind pushed-down predicate values
+        // as "TIME '...'" strings, which the remote rejects as time = varchar
+        assertThat(query("SELECT x FROM remote.default.test_time WHERE x = TIME '10:30:45'"))
+                .isFullyPushedDown();
+        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_time WHERE x = TIME '10:30:45'");
+        assertThat(result.getRowCount()).isEqualTo(1);
+        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).isEqualTo("10:30:45");
+
+        MaterializedResult range = computeActual("SELECT x FROM remote.default.test_time WHERE x > TIME '12:00:00'");
+        assertThat(range.getRowCount()).isEqualTo(1);
+        assertThat(range.getMaterializedRows().get(0).getField(0).toString()).isEqualTo("23:59:59");
+
+        MaterializedResult precise = computeActual("SELECT x FROM remote.default.test_time6 WHERE x = TIME '10:30:45.123456'");
+        assertThat(precise.getRowCount()).isEqualTo(1);
+        assertThat(precise.getMaterializedRows().get(0).getField(0).toString()).isEqualTo("10:30:45.123456");
+    }
+
+    @Test
+    void testTimeConstantParameterInDelegatedProjection()
+    {
+        // Regression: TIME constants in delegated expressions bind through toWriteMapping,
+        // which used the standard write function rejected by the Trino JDBC driver
+        // ("Unsupported object type: java.time.LocalTime"). The OR keeps the expression
+        // off the tuple-domain path so the constant stays a renderer-bound parameter.
+        MaterializedResult result = computeActual(
+                "SELECT (x = TIME '10:30:45' OR x IS NULL) FROM remote.default.test_time ORDER BY 1");
+        assertThat(result.getRowCount()).isEqualTo(2);
+        assertThat(result.getMaterializedRows().get(0).getField(0)).isEqualTo(false);
+        assertThat(result.getMaterializedRows().get(1).getField(0)).isEqualTo(true);
+    }
+
+    @Test
     void testTimeWithTimeZoneTransport()
     {
         MaterializedResult result = computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_timetz3");
@@ -343,10 +617,22 @@ class TestTrinoTypeMapping
     @Test
     void testCharType()
     {
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_char");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        // CHAR is space-padded
-        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).startsWith("abc");
+        MaterializedResult result = computeActual("SELECT CAST(x AS VARCHAR), length(x) FROM remote.default.test_char");
+        assertThat(result.getMaterializedRows().get(0).getField(0)).isEqualTo("abc       ");
+        assertThat(result.getMaterializedRows().get(0).getField(1)).isEqualTo(10L);
+    }
+
+    @Test
+    void testArrayCharType()
+    {
+        MaterializedResult result = computeActual(
+                """
+                SELECT CAST(e AS VARCHAR), length(e)
+                FROM remote.default.test_array_char
+                CROSS JOIN UNNEST(x) AS t(e)
+                """);
+        assertThat(result.getMaterializedRows().get(0).getField(0)).isEqualTo("abc       ");
+        assertThat(result.getMaterializedRows().get(0).getField(1)).isEqualTo(10L);
     }
 
     @Test
@@ -359,81 +645,57 @@ class TestTrinoTypeMapping
     @Test
     void testTimestampWithTimeZoneTopLevel()
     {
-        // Source: TIMESTAMP '2024-01-15 10:30:45.123 UTC'
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_tstz");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        String value = result.getMaterializedRows().get(0).getField(0).toString();
-        assertThat(value).contains("2024-01-15");
-        assertThat(value).contains("10:30:45");
-        assertThat(value).contains(".123");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_tstz").getOnlyValue())
+                .isEqualTo("2024-01-15 10:30:45.123 UTC");
     }
 
     @Test
     void testLongDecimal()
     {
-        // DECIMAL(38, 5) — uses Decimals.encodeScaledValue (long decimal path)
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_long_decimal");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        assertThat(result.getMaterializedRows().get(0).getField(0).toString())
-                .contains("12345678901234567890.12345");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_long_decimal").getOnlyValue())
+                .isEqualTo("12345678901234567890.12345");
     }
 
     @Test
     void testLongTimestamp()
     {
-        // TIMESTAMP(9) — uses LongTimestamp path (source: 2024-01-15 10:30:45.123456789)
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_timestamp9");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        String value = result.getMaterializedRows().get(0).getField(0).toString();
-        assertThat(value).contains("2024-01-15");
-        assertThat(value).contains("10:30:45");
-        assertThat(value).contains(".123456789");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_timestamp9").getOnlyValue())
+                .isEqualTo("2024-01-15 10:30:45.123456789");
     }
 
     @Test
     void testLongTimestampWithTimeZone()
     {
-        // TIMESTAMP(6) WITH TIME ZONE — uses LongTimestampWithTimeZone path
-        // Source: 2024-01-15 10:30:45.123456 UTC
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_tstz6");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        String value = result.getMaterializedRows().get(0).getField(0).toString();
-        assertThat(value).contains("2024-01-15");
-        assertThat(value).contains("10:30:45");
-        assertThat(value).contains(".123456");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_tstz6").getOnlyValue())
+                .isEqualTo("2024-01-15 10:30:45.123456 UTC");
     }
 
     @Test
     void testTimestampWithTimeZonePrecision0()
     {
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_tstz0");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).contains("2024-01-15");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_tstz0").getOnlyValue())
+                .isEqualTo("2024-01-15 10:30:45 UTC");
     }
 
     @Test
     void testTimestampWithTimeZonePrecision1()
     {
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_tstz1");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).contains("2024-01-15");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_tstz1").getOnlyValue())
+                .isEqualTo("2024-01-15 10:30:45.1 UTC");
     }
 
     @Test
     void testTimestampWithTimeZonePrecision2()
     {
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_tstz2");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).contains("2024-01-15");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_tstz2").getOnlyValue())
+                .isEqualTo("2024-01-15 10:30:45.12 UTC");
     }
 
     @Test
     void testTimestampWithTimeZonePrecision9()
     {
-        // Long TSTZ path (precision > 3)
-        MaterializedResult result = computeActual("SELECT x FROM remote.default.test_tstz9");
-        assertThat(result.getRowCount()).isEqualTo(1);
-        assertThat(result.getMaterializedRows().get(0).getField(0).toString()).contains("2024-01-15");
+        assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_tstz9").getOnlyValue())
+                .isEqualTo("2024-01-15 10:30:45.123456789 UTC");
     }
 
     @Test
@@ -470,10 +732,10 @@ class TestTrinoTypeMapping
         MaterializedResult result = computeActual("DESCRIBE remote.default.test_tstz12");
         assertThat(result.getRowCount()).isEqualTo(2);
         assertThat(result.getMaterializedRows()).anySatisfy(row -> {
-            assertThat(row.getField(0)).isEqualTo("unsupported_col");
+            assertThat(row.getField(0)).isEqualTo("transport_col");
             assertThat(row.getField(1).toString()).isEqualTo("timestamp(12) with time zone");
         });
-        assertThat(computeActual("SELECT CAST(unsupported_col AS VARCHAR) FROM remote.default.test_tstz12").getOnlyValue())
+        assertThat(computeActual("SELECT CAST(transport_col AS VARCHAR) FROM remote.default.test_tstz12").getOnlyValue())
                 .isEqualTo("2024-01-15 10:30:45.123456789012 UTC");
     }
 
@@ -483,10 +745,10 @@ class TestTrinoTypeMapping
         MaterializedResult result = computeActual("DESCRIBE remote.default.test_ts12");
         assertThat(result.getRowCount()).isEqualTo(2);
         assertThat(result.getMaterializedRows()).anySatisfy(row -> {
-            assertThat(row.getField(0)).isEqualTo("unsupported_col");
+            assertThat(row.getField(0)).isEqualTo("transport_col");
             assertThat(row.getField(1).toString()).isEqualTo("timestamp(12)");
         });
-        assertThat(computeActual("SELECT CAST(unsupported_col AS VARCHAR) FROM remote.default.test_ts12").getOnlyValue())
+        assertThat(computeActual("SELECT CAST(transport_col AS VARCHAR) FROM remote.default.test_ts12").getOnlyValue())
                 .isEqualTo("2024-01-15 10:30:45.123456789012");
     }
 
@@ -625,6 +887,37 @@ class TestTrinoTypeMapping
                 SELECT CAST(unsupported_col.x AS VARCHAR)
                 FROM remote.default.test_nested_unsupported_row
                 """).getOnlyValue()).isEqualTo("1 00:00:00.000");
+    }
+
+    @Test
+    void testOpaqueUnsupportedTypeConvertsToVarchar()
+    {
+        MaterializedResult result = computeActual("DESCRIBE remote.default.test_unsupported_color");
+        assertThat(result.getMaterializedRows()).anySatisfy(row -> {
+            assertThat(row.getField(0)).isEqualTo("x");
+            assertThat(row.getField(1)).isEqualTo("varchar");
+        });
+    }
+
+    @Test
+    void testTransportBackedTypesDoNotFallBackToVarchar()
+    {
+        assertDescribeColumnType("test_hyperloglog", "x", "HyperLogLog");
+        assertDescribeColumnType("test_qdigest", "x", "qdigest(bigint)");
+        assertDescribeColumnType("test_tdigest", "x", "tdigest");
+        assertDescribeColumnType("test_setdigest", "x", "setdigest");
+        assertDescribeColumnType("test_nested_unsupported_array", "unsupported_col", "array(time(3) with time zone)");
+        assertDescribeColumnType("test_nested_unsupported_map", "unsupported_col", "map(varchar(8), interval day to second)");
+        assertDescribeColumnType("test_nested_unsupported_row", "unsupported_col", "row(x interval day to second)");
+    }
+
+    private void assertDescribeColumnType(String tableName, String columnName, String expectedType)
+    {
+        MaterializedResult result = computeActual("DESCRIBE remote.default." + tableName);
+        assertThat(result.getMaterializedRows()).anySatisfy(row -> {
+            assertThat(row.getField(0)).isEqualTo(columnName);
+            assertThat(row.getField(1).toString()).isEqualToIgnoringCase(expectedType);
+        });
     }
 
     // =========================================================================

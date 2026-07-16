@@ -42,7 +42,6 @@ import io.trino.spi.type.VarcharType;
 import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.time.LocalDate;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +49,7 @@ import java.util.Map;
 import static io.trino.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
+import static io.trino.spi.type.Chars.truncateToLengthAndTrimSpaces;
 import static io.trino.spi.type.DoubleType.DOUBLE;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.RealType.REAL;
@@ -209,7 +209,11 @@ final class JsonTransportCodec
             }
         }
 
-        if (type instanceof VarcharType || type instanceof CharType) {
+        if (type instanceof CharType charType) {
+            type.writeSlice(builder, truncateToLengthAndTrimSpaces(Slices.utf8Slice(value), charType));
+            return;
+        }
+        if (type instanceof VarcharType) {
             type.writeSlice(builder, Slices.utf8Slice(value));
             return;
         }
@@ -238,7 +242,12 @@ final class JsonTransportCodec
             return;
         }
         if (type == BOOLEAN) {
-            type.writeBoolean(builder, Boolean.parseBoolean(value));
+            boolean booleanValue = switch (value) {
+                case "true" -> true;
+                case "false" -> false;
+                default -> throw new TrinoException(JDBC_ERROR, "Invalid boolean JSON transport value: " + value);
+            };
+            type.writeBoolean(builder, booleanValue);
             return;
         }
         if (type instanceof VarbinaryType) {
@@ -246,7 +255,7 @@ final class JsonTransportCodec
             return;
         }
         if (type instanceof DateType) {
-            type.writeLong(builder, LocalDate.parse(value).toEpochDay());
+            type.writeLong(builder, TemporalTransportCodec.parseDate(value).toEpochDay());
             return;
         }
         if (type instanceof TimeType) {
@@ -264,10 +273,10 @@ final class JsonTransportCodec
         }
         if (type instanceof TimestampWithTimeZoneType timestampWithTimeZoneType) {
             if (timestampWithTimeZoneType.isShort()) {
-                type.writeLong(builder, TemporalTransportCodec.parseShortTimestampWithTimeZone(value));
+                type.writeLong(builder, TimestampWithTimeZoneTransport.parseShortTimestampWithTimeZone(value));
             }
             else {
-                type.writeObject(builder, TemporalTransportCodec.parseLongTimestampWithTimeZone(value));
+                type.writeObject(builder, TimestampWithTimeZoneTransport.parseLongTimestampWithTimeZone(value));
             }
             return;
         }

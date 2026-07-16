@@ -19,15 +19,23 @@ mvn clean verify -DskipTests
 mvn test -Dair.check.skip-all=true
 ```
 
+For a lighter local edit/test loop, use the fast-test wrapper. It skips checks
+that are still run by the full build and limits the test JVM heap to 2 GB:
+
+```bash
+testing/fast-test.sh -Dtest=TestTrinoConnectorTest
+```
+
+Additional Maven options are passed through. This wrapper is only for local
+iteration; run `mvn -B clean verify` before submitting a change. Override the
+heap when needed with `TRINO_FAST_TEST_JVM_SIZE`.
+
 ## Test Suites
 
 | Test class | Coverage |
 |------------|----------|
 | `TestTrinoTypeParser` | Type name parsing |
-| `TestTrinoTypeMapping` | Type mapping and transport modes |
-| `TestTrinoUnsupportedTypeHandling` | Unsupported type fallback |
-| `TestTrinoConnectorTest` | Connector contract tests |
-| `TestTrinoConnectorIntegration` | Integration tests |
+| `TestTrinoConnectorTest` | Base JDBC contract, integration, type mapping, and unsupported-type fallback |
 
 ## Local Docker Environment
 
@@ -49,19 +57,23 @@ docker exec -it trino-local trino
 SELECT * FROM trino.tpch.tiny.nation LIMIT 5;
 ```
 
-## Optional Delta Lake Smoke Test
+## Delta Lake Smoke Test
 
-The default CI does not start Delta Lake infrastructure. To validate the
-packaged plugin against a separate Trino 448 cluster backed by a Delta Lake
-catalog, run:
+The default `Build and Test` CI workflow validates the packaged plugin against
+a separate Trino 448 cluster backed by a Delta Lake catalog. It reuses the
+`target/trino-trino-448` package produced by `mvn -B clean verify`.
+
+To run the same smoke test locally:
 
 ```bash
-mvn -B -Dair.check.skip-all=true -DskipTests package
-testing/delta-smoke/run.sh
+mvn -B clean verify
+testing/remote-delta-smoke/run.sh
 ```
 
-This starts local and remote Trino containers, MinIO, and Hive Metastore. See
-`docs/delta-smoke.md` for details.
+This starts local and remote Trino containers, MinIO, and Hive Metastore for
+the remote Delta smoke test.
+Failure diagnostics are written to `target/remote-delta-smoke/`. See
+`docs/remote-delta-smoke.md` for details.
 
 ## Documentation
 

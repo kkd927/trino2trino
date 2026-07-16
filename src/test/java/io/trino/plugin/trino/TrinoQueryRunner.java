@@ -18,13 +18,12 @@ import io.trino.Session;
 import io.trino.plugin.memory.MemoryPlugin;
 import io.trino.plugin.tpch.TpchPlugin;
 import io.trino.testing.DistributedQueryRunner;
-import io.trino.testing.QueryRunner;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 import static io.trino.testing.TestingSession.testSessionBuilder;
+import static java.util.stream.Collectors.joining;
 
 /**
  * Sets up two in-process Trino instances for testing the trino2trino connector:
@@ -35,45 +34,71 @@ import static io.trino.testing.TestingSession.testSessionBuilder;
  */
 public final class TrinoQueryRunner
 {
+    /**
+     * Representative type coverage replacing the base testDataMappingSmokeTest,
+     * which requires CREATE TABLE through the connector and is skipped for
+     * read-only connectors. Fixtures are created remotely with a sample value,
+     * a high value, and a NULL per type.
+     */
+    record DataMappingCase(String suffix, String type, String sampleLiteral, String highLiteral)
+    {
+        String columnName()
+        {
+            return "value_" + suffix;
+        }
+
+        String sampleValue()
+        {
+            return cast(sampleLiteral);
+        }
+
+        String highValue()
+        {
+            return cast(highLiteral);
+        }
+
+        String nullValue()
+        {
+            return cast("NULL");
+        }
+
+        private String cast(String literal)
+        {
+            return "CAST(" + literal + " AS " + type + ")";
+        }
+    }
+
+    static final List<DataMappingCase> DATA_MAPPING_CASES = List.of(
+            new DataMappingCase("boolean", "boolean", "false", "true"),
+            new DataMappingCase("tinyint", "tinyint", "TINYINT '37'", "TINYINT '127'"),
+            new DataMappingCase("smallint", "smallint", "SMALLINT '32123'", "SMALLINT '32767'"),
+            new DataMappingCase("integer", "integer", "1274942432", "2147483647"),
+            new DataMappingCase("bigint", "bigint", "BIGINT '312739231274942432'", "BIGINT '9223372036854775807'"),
+            new DataMappingCase("real", "real", "REAL '567.123'", "REAL '999999.999'"),
+            new DataMappingCase("double", "double", "DOUBLE '1234567890123.123'", "DOUBLE '9999999999999.999'"),
+            new DataMappingCase("decimal_short", "decimal(3,1)", "12.3", "99.9"),
+            new DataMappingCase("decimal_long", "decimal(30,5)", "DECIMAL '3141592653589793238462643.38327'", "DECIMAL '9999999999999999999999999.99999'"),
+            new DataMappingCase("varchar", "varchar", "'test'", "'shall I compare thee to a summer''s day'"),
+            new DataMappingCase("char", "char(3)", "'ab'", "'zzz'"),
+            new DataMappingCase("varbinary", "varbinary", "X'12ab3f'", "X'ffffffffffffffffffff'"),
+            new DataMappingCase("date", "date", "DATE '2020-02-12'", "DATE '9999-12-31'"),
+            new DataMappingCase("time_3", "time(3)", "TIME '15:03:00.123'", "TIME '23:59:59.999'"),
+            new DataMappingCase("time_6", "time(6)", "TIME '15:03:00.123456'", "TIME '23:59:59.999999'"),
+            new DataMappingCase("time_12", "time(12)", "TIME '15:03:00.123456789012'", "TIME '23:59:59.999999999999'"),
+            new DataMappingCase("timestamp_3", "timestamp(3)", "TIMESTAMP '2020-02-12 15:03:00.123'", "TIMESTAMP '2199-12-31 23:59:59.999'"),
+            new DataMappingCase("timestamp_6", "timestamp(6)", "TIMESTAMP '2020-02-12 15:03:00.123456'", "TIMESTAMP '2199-12-31 23:59:59.999999'"),
+            new DataMappingCase("timestamp_9", "timestamp(9)", "TIMESTAMP '2020-02-12 15:03:00.123456789'", "TIMESTAMP '2199-12-31 23:59:59.999999999'"),
+            new DataMappingCase("timestamp_12", "timestamp(12)", "TIMESTAMP '2020-02-12 15:03:00.123456789012'", "TIMESTAMP '2199-12-31 23:59:59.999999999999'"),
+            new DataMappingCase("timestamptz_3", "timestamp(3) with time zone", "TIMESTAMP '2020-02-12 15:03:00.123 +01:00'", "TIMESTAMP '9999-12-31 23:59:59.999 +12:00'"),
+            new DataMappingCase("timestamptz_6", "timestamp(6) with time zone", "TIMESTAMP '2020-02-12 15:03:00.123456 +01:00'", "TIMESTAMP '9999-12-31 23:59:59.999999 +12:00'"),
+            new DataMappingCase("timestamptz_12", "timestamp(12) with time zone", "TIMESTAMP '2020-02-12 15:03:00.123456789012 +01:00'", "TIMESTAMP '9999-12-31 23:59:59.999999999999 +12:00'"),
+            new DataMappingCase("uuid", "uuid", "UUID '12151fd2-7586-11e9-8f9e-2a86e4085a59'", "UUID 'ffffffff-ffff-ffff-ffff-ffffffffffff'"));
+
     private TrinoQueryRunner() {}
 
     public static Builder builder(DistributedQueryRunner remoteRunner)
     {
         return new Builder(remoteRunner);
-    }
-
-    /**
-     * Creates a standard two-instance query runner with tpch data and complex-type test data.
-     * Connects to the memory catalog on the remote and populates it with tpch data
-     * plus complex type test tables. Uses explicit catalog in the JDBC URL to avoid
-     * ambiguity when the remote has multiple catalogs with overlapping schema names.
-     */
-    public static QueryRunner createQueryRunner()
-            throws Exception
-    {
-        DistributedQueryRunner remoteRunner = createRemoteQueryRunner();
-        populateTpchData(remoteRunner);
-        return builder(remoteRunner)
-                .setRemoteCatalog("memory")
-                .setDefaultSchema("default")
-                .withComplexTypeTestData()
-                .build();
-    }
-
-    /**
-     * Creates a query runner suitable for BaseJdbcConnectorTest.
-     * Connects to the memory catalog on the remote for writable table support.
-     */
-    public static QueryRunner createQueryRunnerForConnectorTest()
-            throws Exception
-    {
-        DistributedQueryRunner remoteRunner = createRemoteQueryRunner();
-        return builder(remoteRunner)
-                .setRemoteCatalog("memory")
-                .setDefaultSchema("default")
-                // Skip staging tables — remote Trino catalogs handle their own atomicity
-                .addConnectorProperty("insert.non-transactional-insert.enabled", "true")
-                .build();
     }
 
     /**
@@ -85,30 +110,28 @@ public final class TrinoQueryRunner
         DistributedQueryRunner remoteRunner = DistributedQueryRunner.builder(
                         testSessionBuilder().setCatalog("tpch").setSchema("tiny").build())
                 .setWorkerCount(0)
+                // The full connector suite issues thousands of remote queries in parallel.
+                // Keep completed queries available while JDBC fetches their result pages.
+                .addExtraProperty("query.max-history", "1000")
                 .build();
-        remoteRunner.installPlugin(new TpchPlugin());
-        remoteRunner.createCatalog("tpch", "tpch");
-        remoteRunner.installPlugin(new MemoryPlugin());
-        remoteRunner.createCatalog("memory", "memory");
-        return remoteRunner;
-    }
-
-    /**
-     * Returns a session targeting the 'remote' catalog (trino2trino connector).
-     */
-    public static Session createSession()
-    {
-        return testSessionBuilder()
-                .setCatalog("remote")
-                .setSchema("default")
-                .build();
+        try {
+            remoteRunner.installPlugin(new TpchPlugin());
+            remoteRunner.createCatalog("tpch", "tpch");
+            remoteRunner.installPlugin(new MemoryPlugin());
+            remoteRunner.createCatalog("memory", "memory");
+            return remoteRunner;
+        }
+        catch (Exception | Error failure) {
+            closeOnFailure(remoteRunner, failure);
+            throw failure;
+        }
     }
 
     /**
      * Populates the remote memory catalog with tpch tiny data so that
      * integration tests can access tpch tables through a single catalog connection.
      */
-    private static void populateTpchData(DistributedQueryRunner remoteRunner)
+    static void populateTpchData(DistributedQueryRunner remoteRunner)
     {
         Session memorySession = testSessionBuilder()
                 .setCatalog("memory")
@@ -124,20 +147,15 @@ public final class TrinoQueryRunner
     public static final class Builder
     {
         private final DistributedQueryRunner remoteRunner;
-        private final Map<String, String> connectorProperties = new HashMap<>();
         private String remoteCatalog = "";
         private String defaultSchema = "tiny";
         private boolean withComplexTypeTestData;
+        private boolean withRemoteTpchCatalog;
+        private boolean withStatisticsDisabledCatalog;
 
         private Builder(DistributedQueryRunner remoteRunner)
         {
             this.remoteRunner = remoteRunner;
-        }
-
-        public Builder addConnectorProperty(String key, String value)
-        {
-            connectorProperties.put(key, value);
-            return this;
         }
 
         public Builder setRemoteCatalog(String remoteCatalog)
@@ -158,6 +176,27 @@ public final class TrinoQueryRunner
             return this;
         }
 
+        /**
+         * Also creates a "remote_tpch" catalog pointing at the remote TPCH catalog.
+         * TPCH exposes complete table and column statistics, unlike Memory, so it is
+         * used to exercise cost-based automatic join pushdown.
+         */
+        public Builder withRemoteTpchCatalog()
+        {
+            this.withRemoteTpchCatalog = true;
+            return this;
+        }
+
+        /**
+         * Also creates a "remote_stats_disabled" catalog pointing at the same remote
+         * with {@code statistics.enabled=false}, without booting another cluster.
+         */
+        public Builder withStatisticsDisabledCatalog()
+        {
+            this.withStatisticsDisabledCatalog = true;
+            return this;
+        }
+
         public DistributedQueryRunner build()
                 throws Exception
         {
@@ -168,33 +207,70 @@ public final class TrinoQueryRunner
                     .setSchema(defaultSchema)
                     .build();
 
-            DistributedQueryRunner localRunner = DistributedQueryRunner.builder(defaultSession)
-                    .setWorkerCount(0)
+            // The local runner keeps the default worker count so inherited framework
+            // tests exercise a genuinely distributed plan; the remote runner stays at
+            // zero workers to bound test cost.
+            DistributedQueryRunner.Builder<?> localRunnerBuilder = DistributedQueryRunner.builder(defaultSession)
                     .addExtraProperty("retry-policy", "NONE")
-                    .build();
+                    .registerResource(remoteRunner);
+            DistributedQueryRunner localRunner = localRunnerBuilder.build();
+            try {
+                localRunner.installPlugin(new TpchPlugin());
+                localRunner.createCatalog("tpch", "tpch");
 
-            localRunner.installPlugin(new TpchPlugin());
-            localRunner.createCatalog("tpch", "tpch");
+                String connectionUrl = "jdbc:trino://localhost:" + remotePort;
+                if (!remoteCatalog.isEmpty()) {
+                    connectionUrl += "/" + remoteCatalog;
+                }
 
-            String connectionUrl = "jdbc:trino://localhost:" + remotePort;
-            if (!remoteCatalog.isEmpty()) {
-                connectionUrl += "/" + remoteCatalog;
+                Map<String, String> properties = createConnectorProperties(connectionUrl);
+
+                localRunner.installPlugin(new TrinoPlugin());
+                localRunner.createCatalog("remote", "trino", properties);
+
+                if (withRemoteTpchCatalog) {
+                    localRunner.createCatalog(
+                            "remote_tpch",
+                            "trino",
+                            createConnectorProperties("jdbc:trino://localhost:" + remotePort + "/tpch"));
+                }
+
+                if (withStatisticsDisabledCatalog) {
+                    Map<String, String> statsDisabledProperties = ImmutableMap.<String, String>builder()
+                            .putAll(properties)
+                            .put("statistics.enabled", "false")
+                            .buildOrThrow();
+                    localRunner.createCatalog("remote_stats_disabled", "trino", statsDisabledProperties);
+                }
+
+                if (withComplexTypeTestData) {
+                    createTestData(remoteRunner);
+                }
+
+                return localRunner;
             }
+            catch (Exception | Error failure) {
+                closeOnFailure(localRunner, failure);
+                throw failure;
+            }
+        }
 
-            Map<String, String> properties = ImmutableMap.<String, String>builder()
+        private Map<String, String> createConnectorProperties(String connectionUrl)
+        {
+            return ImmutableMap.<String, String>builder()
                     .put("connection-url", connectionUrl)
                     .put("connection-user", "test")
-                    .putAll(connectorProperties)
                     .buildOrThrow();
+        }
+    }
 
-            localRunner.installPlugin(new TrinoPlugin());
-            localRunner.createCatalog("remote", "trino", properties);
-
-            if (withComplexTypeTestData) {
-                createTestData(remoteRunner);
-            }
-
-            return localRunner;
+    static void closeOnFailure(AutoCloseable closeable, Throwable failure)
+    {
+        try {
+            closeable.close();
+        }
+        catch (Throwable closeFailure) {
+            failure.addSuppressed(closeFailure);
         }
     }
 
@@ -209,6 +285,7 @@ public final class TrinoQueryRunner
                 .build();
 
         remoteRunner.execute(memorySession, "CREATE SCHEMA alt");
+        remoteRunner.execute(memorySession, "CREATE SCHEMA empty_schema");
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE alt.access_log AS SELECT * FROM (VALUES BIGINT '1', BIGINT '2') AS t(id)");
@@ -239,6 +316,24 @@ public final class TrinoQueryRunner
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_row_null AS SELECT CAST(ROW('Alice', NULL) AS ROW(name VARCHAR, age INTEGER)) AS x UNION ALL SELECT CAST(NULL AS ROW(name VARCHAR, age INTEGER))");
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_row_temporal_null AS
+                SELECT * FROM (
+                    VALUES
+                        (1, CAST(NULL AS ROW(ts TIMESTAMP(3), name VARCHAR))),
+                        (2, CAST(ROW(CAST(NULL AS TIMESTAMP(3)), CAST(NULL AS VARCHAR)) AS ROW(ts TIMESTAMP(3), name VARCHAR))),
+                        (3, CAST(ROW(TIMESTAMP '2024-01-15 10:30:45.123', 'ok') AS ROW(ts TIMESTAMP(3), name VARCHAR)))
+                ) AS t(id, x)
+                """);
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_array_row_temporal_null AS
+                SELECT ARRAY[
+                    CAST(NULL AS ROW(ts TIMESTAMP(3), name VARCHAR)),
+                    CAST(ROW(CAST(NULL AS TIMESTAMP(3)), CAST(NULL AS VARCHAR)) AS ROW(ts TIMESTAMP(3), name VARCHAR))
+                ] AS x
+                """);
 
         // --- Nested: array(map(varchar, varchar)) ---
         remoteRunner.execute(memorySession,
@@ -290,6 +385,17 @@ public final class TrinoQueryRunner
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_date AS SELECT x FROM (VALUES DATE '2024-01-15', DATE '1999-12-31') AS t(x)");
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_historical_date AS
+                SELECT * FROM (
+                    VALUES
+                        (1, DATE '-0001-01-01'),
+                        (2, DATE '0000-01-01'),
+                        (3, DATE '1582-10-10'),
+                        (4, DATE '+10000-01-01')
+                ) AS t(id, x)
+                """);
 
         // --- Timestamp with precision ---
         remoteRunner.execute(
@@ -314,6 +420,9 @@ public final class TrinoQueryRunner
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_array_date AS SELECT ARRAY[DATE '2024-01-01', DATE '2024-06-15'] AS x");
+        remoteRunner.execute(
+                memorySession,
+                "CREATE TABLE test_array_historical_date AS SELECT ARRAY[DATE '-0001-01-01', DATE '0000-01-01', DATE '1582-10-10', DATE '+10000-01-01'] AS x");
 
         // --- Map with decimal values ---
         remoteRunner.execute(
@@ -324,6 +433,16 @@ public final class TrinoQueryRunner
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_array_timestamp AS SELECT ARRAY[TIMESTAMP '2024-01-15 10:30:45.123456', TIMESTAMP '2024-06-15 23:59:59.000000'] AS x");
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_timestamp12_topn AS
+                SELECT * FROM (
+                    VALUES
+                        ('first', CAST(TIMESTAMP '2024-01-15 10:30:45.123456789010' AS TIMESTAMP(12))),
+                        ('second', CAST(TIMESTAMP '2024-01-15 10:30:45.123456789011' AS TIMESTAMP(12))),
+                        ('third', CAST(TIMESTAMP '2024-01-15 10:30:45.123456789012' AS TIMESTAMP(12)))
+                ) AS t(id, ts)
+                """);
 
         // --- Array of timestamp with time zone ---
         remoteRunner.execute(
@@ -355,6 +474,15 @@ public final class TrinoQueryRunner
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_time12 AS SELECT CAST(TIME '10:30:45.123456789012' AS TIME(12)) AS x");
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_array_time_precision AS
+                SELECT
+                    ARRAY[CAST(TIME '10:30:45' AS TIME(0))] AS p0,
+                    ARRAY[CAST(TIME '10:30:45.123' AS TIME(3))] AS p3,
+                    ARRAY[CAST(TIME '10:30:45.123456' AS TIME(6))] AS p6,
+                    ARRAY[CAST(TIME '10:30:45.123456789' AS TIME(9))] AS p9
+                """);
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_timetz3 AS SELECT CAST(TIME '10:30:45.123 +09:00' AS TIME(3) WITH TIME ZONE) AS x");
@@ -363,6 +491,19 @@ public final class TrinoQueryRunner
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_char AS SELECT CAST('abc' AS CHAR(10)) AS x");
+        remoteRunner.execute(
+                memorySession,
+                "CREATE TABLE test_array_char AS SELECT ARRAY[CAST('abc' AS CHAR(10))] AS x");
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_char_varchar_predicate AS
+                SELECT * FROM (
+                    VALUES
+                        (1, CAST('a' AS CHAR(3)), VARCHAR 'a'),
+                        (2, CAST('a' AS CHAR(3)), VARCHAR 'a  '),
+                        (3, CAST('b' AS CHAR(3)), VARCHAR 'b  ')
+                ) AS t(id, c, v)
+                """);
 
         // --- VARBINARY type ---
         remoteRunner.execute(
@@ -373,6 +514,44 @@ public final class TrinoQueryRunner
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_tstz AS SELECT TIMESTAMP '2024-01-15 10:30:45.123 UTC' AS x");
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_tstz_dst_fold AS
+                SELECT * FROM (
+                    VALUES
+                        (
+                            1,
+                            CAST(at_timezone(TIMESTAMP '2022-10-30 00:30:00.123 UTC', 'Europe/Warsaw') AS TIMESTAMP(3) WITH TIME ZONE),
+                            CAST(at_timezone(TIMESTAMP '2022-10-30 00:30:00.123456789012 UTC', 'Europe/Warsaw') AS TIMESTAMP(12) WITH TIME ZONE)
+                        ),
+                        (
+                            2,
+                            CAST(at_timezone(TIMESTAMP '2022-10-30 01:30:00.123 UTC', 'Europe/Warsaw') AS TIMESTAMP(3) WITH TIME ZONE),
+                            CAST(at_timezone(TIMESTAMP '2022-10-30 01:30:00.123456789012 UTC', 'Europe/Warsaw') AS TIMESTAMP(12) WITH TIME ZONE)
+                        )
+                ) AS t(id, p3, p12)
+                """);
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_nested_tstz_dst_fold AS
+                WITH fold AS (
+                    SELECT
+                        CAST(at_timezone(TIMESTAMP '2022-10-30 00:30:00.123456789012 UTC', 'Europe/Warsaw') AS TIMESTAMP(12) WITH TIME ZONE) AS earlier,
+                        CAST(at_timezone(TIMESTAMP '2022-10-30 01:30:00.123456789012 UTC', 'Europe/Warsaw') AS TIMESTAMP(12) WITH TIME ZONE) AS later
+                )
+                SELECT
+                    ARRAY[earlier, later] AS array_value,
+                    MAP(ARRAY['earlier', 'later'], ARRAY[earlier, later]) AS map_value,
+                    CAST(ROW(earlier, later) AS ROW(earlier TIMESTAMP(12) WITH TIME ZONE, later TIMESTAMP(12) WITH TIME ZONE)) AS row_value
+                FROM fold
+                """);
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_tstz_historical_zone AS
+                SELECT CAST(
+                    at_timezone(TIMESTAMP '1890-01-01 00:00:00.000 UTC', 'Europe/Paris')
+                    AS TIMESTAMP(3) WITH TIME ZONE) AS value
+                """);
 
         // --- Long DECIMAL (precision > 18, uses Decimals.encodeScaledValue path) ---
         remoteRunner.execute(
@@ -442,15 +621,15 @@ public final class TrinoQueryRunner
                 memorySession,
                 "CREATE TABLE test_row_json AS SELECT CAST(ROW('test', JSON '{\"key\":\"val\"}') AS ROW(label VARCHAR, data JSON)) AS x");
 
-        // --- TSTZ precision > 9: unsupported (Java ZonedDateTime caps at nanosecond) ---
+        // --- TSTZ precision > 9: lossless transport fallback because Java ZonedDateTime caps at nanoseconds ---
         remoteRunner.execute(
                 memorySession,
-                "CREATE TABLE test_tstz12 AS SELECT CAST('id1' AS VARCHAR) AS id, CAST(TIMESTAMP '2024-01-15 10:30:45.123456789012 UTC' AS TIMESTAMP(12) WITH TIME ZONE) AS unsupported_col");
+                "CREATE TABLE test_tstz12 AS SELECT CAST('id1' AS VARCHAR) AS id, CAST(TIMESTAMP '2024-01-15 10:30:45.123456789012 UTC' AS TIMESTAMP(12) WITH TIME ZONE) AS transport_col");
 
-        // --- Plain TIMESTAMP precision > 9: unsupported (JDBC caps at nanosecond) ---
+        // --- Plain TIMESTAMP precision > 9: lossless transport fallback because JDBC caps at nanoseconds ---
         remoteRunner.execute(
                 memorySession,
-                "CREATE TABLE test_ts12 AS SELECT CAST('id1' AS VARCHAR) AS id, CAST(TIMESTAMP '2024-01-15 10:30:45.123456789012' AS TIMESTAMP(12)) AS unsupported_col");
+                "CREATE TABLE test_ts12 AS SELECT CAST('id1' AS VARCHAR) AS id, CAST(TIMESTAMP '2024-01-15 10:30:45.123456789012' AS TIMESTAMP(12)) AS transport_col");
 
         // --- Top-level interval transport fallback ---
         remoteRunner.execute(
@@ -505,5 +684,26 @@ public final class TrinoQueryRunner
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_unsupported_color AS SELECT rgb(255, 0, 0) AS x");
+
+        // --- Representative data-mapping fixture (sample/high/null per type) ---
+        String columnNames = DATA_MAPPING_CASES.stream()
+                .map(DataMappingCase::columnName)
+                .collect(joining(", "));
+        String sampleValues = DATA_MAPPING_CASES.stream()
+                .map(DataMappingCase::sampleValue)
+                .collect(joining(", "));
+        String highValues = DATA_MAPPING_CASES.stream()
+                .map(DataMappingCase::highValue)
+                .collect(joining(", "));
+        String nullValues = DATA_MAPPING_CASES.stream()
+                .map(DataMappingCase::nullValue)
+                .collect(joining(", "));
+        remoteRunner.execute(
+                memorySession,
+                "CREATE TABLE data_mapping AS SELECT * FROM (VALUES " +
+                        "(1, " + sampleValues + "), " +
+                        "(2, " + highValues + "), " +
+                        "(3, " + nullValues + ")) " +
+                        "AS t(id, " + columnNames + ")");
     }
 }

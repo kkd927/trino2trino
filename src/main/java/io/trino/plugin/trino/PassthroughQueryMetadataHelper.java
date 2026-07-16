@@ -62,9 +62,9 @@ final class PassthroughQueryMetadataHelper
             throws SQLException
     {
         String statementName = "t2t_" + UUID.randomUUID().toString().replace("-", "");
-        String query = TrinoClient.stripTrailingSemicolon(preparedQuery.query());
         try (Statement statement = connection.createStatement()) {
-            statement.execute("PREPARE " + statementName + " FROM " + query);
+            statement.execute("PREPARE " + statementName + " FROM " + preparedQuery.query());
+            Throwable primaryFailure = null;
             try (ResultSet resultSet = statement.executeQuery("DESCRIBE OUTPUT " + statementName)) {
                 List<DescribedOutputColumn> outputColumns = new ArrayList<>();
                 while (resultSet.next()) {
@@ -72,8 +72,24 @@ final class PassthroughQueryMetadataHelper
                 }
                 return outputColumns;
             }
+            catch (SQLException | RuntimeException | Error failure) {
+                primaryFailure = failure;
+                throw failure;
+            }
             finally {
-                statement.execute("DEALLOCATE PREPARE " + statementName);
+                try {
+                    statement.execute("DEALLOCATE PREPARE " + statementName);
+                }
+                catch (SQLException | RuntimeException | Error deallocateFailure) {
+                    if (primaryFailure != null) {
+                        if (primaryFailure != deallocateFailure) {
+                            primaryFailure.addSuppressed(deallocateFailure);
+                        }
+                    }
+                    else {
+                        throw deallocateFailure;
+                    }
+                }
             }
         }
     }
@@ -91,7 +107,7 @@ final class PassthroughQueryMetadataHelper
                 .map(PassthroughQueryMetadataHelper::quoteIdentifier)
                 .collect(joining(", "));
         return preparedQuery.transformQuery(query ->
-                "SELECT * FROM (" + TrinoClient.stripTrailingSemicolon(query) + ") " + quoteIdentifier("_trino_passthrough") + "(" + aliases + ")");
+                "SELECT * FROM (" + query + ") " + quoteIdentifier("_trino_passthrough") + "(" + aliases + ")");
     }
 
     JdbcTableHandle buildPassthroughTableHandle(ConnectorSession session, Connection connection, PreparedQuery preparedQuery, List<DescribedOutputColumn> outputColumns)

@@ -17,6 +17,7 @@ import io.airlift.slice.Slices;
 import io.trino.plugin.jdbc.JdbcColumnHandle;
 import io.trino.plugin.jdbc.JdbcTypeHandle;
 import io.trino.plugin.jdbc.expression.ParameterizedExpression;
+import io.trino.spi.block.BlockBuilder;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.expression.Call;
@@ -39,6 +40,7 @@ import java.util.Set;
 
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
+import static io.trino.spi.type.CharType.createCharType;
 import static io.trino.spi.type.TimestampType.TIMESTAMP_MILLIS;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -47,9 +49,7 @@ class TestTrinoRemoteSqlRenderer
 {
     private static final ConnectorSession SESSION = TestingConnectorSession.builder()
             .setPropertyMetadata(new TrinoRemoteDelegationSessionProperties(new TrinoRemoteDelegationConfig()).getSessionProperties())
-            .setPropertyValues(Map.of(
-                    TrinoRemoteDelegationSessionProperties.REMOTE_DELEGATION_ENABLED, true,
-                    TrinoRemoteDelegationSessionProperties.REMOTE_DELEGATION_MODE, TrinoRemoteDelegationMode.AUTO.name()))
+            .setPropertyValues(Map.of(TrinoRemoteDelegationSessionProperties.REMOTE_DELEGATION_ENABLED, true))
             .build();
 
     private static final JdbcTypeHandle BIGINT_TYPE_HANDLE = new JdbcTypeHandle(
@@ -63,6 +63,13 @@ class TestTrinoRemoteSqlRenderer
             Types.VARCHAR,
             Optional.of("varchar"),
             Optional.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty());
+    private static final JdbcTypeHandle CHAR3_TYPE_HANDLE = new JdbcTypeHandle(
+            Types.CHAR,
+            Optional.of("char(3)"),
+            Optional.of(3),
             Optional.empty(),
             Optional.empty(),
             Optional.empty());
@@ -92,6 +99,119 @@ class TestTrinoRemoteSqlRenderer
         assertThat(rewritten.parameters()).hasSize(1);
         assertThat(rewritten.parameters().getFirst().getType()).isEqualTo(TIMESTAMP_MILLIS);
         assertThat(rewritten.parameters().getFirst().getValue()).contains(0L);
+    }
+
+    @Test
+    void testCharToVarcharCastRequiresRemoteRetainingSemantics()
+    {
+        ConnectorExpression cast = new Call(
+                VARCHAR,
+                StandardFunctions.CAST_FUNCTION_NAME,
+                List.of(new Variable("c", createCharType(3))));
+        Map<String, ColumnHandle> assignments = Map.of("c", column("c", CHAR3_TYPE_HANDLE, createCharType(3)));
+
+        ParameterizedExpression retaining = render(
+                cast,
+                assignments,
+                TrinoRemoteCapabilities.forTestingLegacyCharToVarcharCast(Set.of()));
+        assertThat(retaining.expression())
+                .isEqualTo("CAST(\"c\" AS varchar)");
+
+        assertThat(renderer.renderExpression(
+                SESSION,
+                cast,
+                assignments,
+                capabilities))
+                .isEmpty();
+
+        assertThat(renderer.renderExpression(
+                SESSION,
+                cast,
+                assignments,
+                new TrinoRemoteCapabilities(Optional.of("unknown"), Optional.of(Set.of()), Optional.of("UTC"), Optional.empty())))
+                .isEmpty();
+    }
+
+    @Test
+    void testNestedCharToVarcharCastRequiresRemoteRetainingSemantics()
+    {
+        ArrayType sourceType = new ArrayType(createCharType(3));
+        ArrayType targetType = new ArrayType(VARCHAR);
+        ConnectorExpression cast = new Call(
+                targetType,
+                StandardFunctions.CAST_FUNCTION_NAME,
+                List.of(new Variable("values", sourceType)));
+        Map<String, ColumnHandle> assignments = Map.of(
+                "values", column(
+                        "values",
+                        new JdbcTypeHandle(Types.ARRAY, Optional.of("array(char(3))"), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty()),
+                        sourceType));
+
+        assertThat(render(
+                cast,
+                assignments,
+                TrinoRemoteCapabilities.forTestingLegacyCharToVarcharCast(Set.of())).expression())
+                .isEqualTo("CAST(\"values\" AS array(varchar))");
+        assertThat(renderer.renderExpression(
+                SESSION,
+                cast,
+                assignments,
+                capabilities))
+                .isEmpty();
+        assertThat(renderer.renderExpression(
+                SESSION,
+                cast,
+                assignments,
+                TrinoRemoteCapabilities.unavailable()))
+                .isEmpty();
+    }
+
+    @Test
+    void testRetainingCharToVarcharCastIsPreservedInsideNestedExpression()
+    {
+        ConnectorExpression expression = new Call(
+                VARCHAR,
+                new FunctionName("concat"),
+                List.of(
+                        new Call(
+                                VARCHAR,
+                                StandardFunctions.CAST_FUNCTION_NAME,
+                                List.of(new Variable("c", createCharType(3)))),
+                        varcharConstant("-suffix")));
+
+        ParameterizedExpression rewritten = render(
+                expression,
+                Map.of("c", column("c", CHAR3_TYPE_HANDLE, createCharType(3))),
+                TrinoRemoteCapabilities.forTestingLegacyCharToVarcharCast(Set.of("concat")));
+
+        assertThat(rewritten.expression())
+                .isEqualTo("concat(CAST(\"c\" AS varchar), CAST(? AS varchar))");
+        assertThat(rewritten.parameters()).hasSize(1);
+    }
+
+    @Test
+    void testRetainingCharToVarcharCastIsPreservedInsidePredicate()
+    {
+        ConnectorExpression expression = new Call(
+                BOOLEAN,
+                StandardFunctions.EQUAL_OPERATOR_FUNCTION_NAME,
+                List.of(
+                        new Call(
+                                VARCHAR,
+                                StandardFunctions.CAST_FUNCTION_NAME,
+                                List.of(new Variable("c", createCharType(3)))),
+                        new Variable("v", VARCHAR)));
+
+        ParameterizedExpression rewritten = render(
+                expression,
+                Map.of(
+                        "c", column("c", CHAR3_TYPE_HANDLE, createCharType(3)),
+                        "v", column("v", VARCHAR_TYPE_HANDLE, VARCHAR)),
+                TrinoRemoteCapabilities.forTestingLegacyCharToVarcharCast(Set.of()));
+
+        assertThat(rewritten.expression())
+                .isEqualTo("(CAST(\"c\" AS varchar) = \"v\")");
+        assertThat(rewritten.parameters()).isEmpty();
     }
 
     @Test
@@ -127,7 +247,7 @@ class TestTrinoRemoteSqlRenderer
                         "path", column("path", VARCHAR_TYPE_HANDLE, VARCHAR),
                         "log_timestamp", column("log_timestamp", VARCHAR_TYPE_HANDLE, VARCHAR)));
 
-        assertThat(rewritten.expression()).isEqualTo("(regexp_like(\"path\", ?) AND (date_trunc(?, CAST(\"log_timestamp\" AS timestamp(3))) = CAST(? AS timestamp(3))))");
+        assertThat(rewritten.expression()).isEqualTo("(regexp_like(\"path\", CAST(? AS varchar)) AND (date_trunc(CAST(? AS varchar), CAST(\"log_timestamp\" AS timestamp(3))) = CAST(CAST(? AS varchar) AS timestamp(3))))");
         assertThat(rewritten.parameters()).hasSize(3);
     }
 
@@ -148,11 +268,67 @@ class TestTrinoRemoteSqlRenderer
                 List.of(new Variable("tags", new ArrayType(VARCHAR)), new Constant(1L, BIGINT)));
 
         assertThat(render(inPredicate, Map.of("regionkey", column("regionkey"))).expression())
-                .isEqualTo("(\"regionkey\" IN (?, ?))");
+                .isEqualTo("(\"regionkey\" IN (CAST(? AS bigint), CAST(? AS bigint)))");
         assertThat(render(likePredicate, Map.of("name", column("name", VARCHAR_TYPE_HANDLE, VARCHAR))).expression())
-                .isEqualTo("(\"name\" LIKE ?)");
+                .isEqualTo("(\"name\" LIKE CAST(? AS varchar))");
         assertThat(render(subscript, Map.of("tags", column("tags", VARCHAR_TYPE_HANDLE, new ArrayType(VARCHAR)))).expression())
-                .isEqualTo("\"tags\"[?]");
+                .isEqualTo("\"tags\"[CAST(? AS bigint)]");
+    }
+
+    @Test
+    void testComplexConstantFallsBackToLocalEvaluation()
+    {
+        // Regression: complex-typed constants were emitted as QueryParameters, whose
+        // only handle-less binding path (toWriteMapping) rejects complex values
+        ArrayType arrayType = new ArrayType(BIGINT);
+        BlockBuilder arrayValue = BIGINT.createBlockBuilder(null, 2);
+        BIGINT.writeLong(arrayValue, 1);
+        BIGINT.writeLong(arrayValue, 2);
+        ConnectorExpression arrayComparison = new Call(
+                BOOLEAN,
+                StandardFunctions.EQUAL_OPERATOR_FUNCTION_NAME,
+                List.of(new Variable("tags", arrayType), new Constant(arrayValue.build(), arrayType)));
+
+        assertThat(renderer.renderExpression(SESSION, arrayComparison, Map.of("tags", column("tags", VARCHAR_TYPE_HANDLE, arrayType)), capabilities))
+                .isEmpty();
+    }
+
+    @Test
+    void testNullComplexConstantRendersTypedNull()
+    {
+        // NULL complex constants carry no parameter, so they remain renderable
+        ArrayType arrayType = new ArrayType(BIGINT);
+        ConnectorExpression nullComparison = new Call(
+                BOOLEAN,
+                StandardFunctions.IDENTICAL_OPERATOR_FUNCTION_NAME,
+                List.of(new Variable("tags", arrayType), new Constant(null, arrayType)));
+
+        ParameterizedExpression rewritten = render(nullComparison, Map.of("tags", column("tags", VARCHAR_TYPE_HANDLE, arrayType)));
+        assertThat(rewritten.expression()).isEqualTo("(\"tags\" IS NOT DISTINCT FROM CAST(NULL AS array(bigint)))");
+        assertThat(rewritten.parameters()).isEmpty();
+    }
+
+    @Test
+    void testBareConstantComparisonProjectionFallsBackToLocalEvaluation()
+    {
+        // The bare column-to-constant comparison gate fires on any top-level
+        // expression, so projections of this shape are not delegated either
+        ConnectorExpression comparison = new Call(
+                BOOLEAN,
+                StandardFunctions.EQUAL_OPERATOR_FUNCTION_NAME,
+                List.of(new Variable("status", VARCHAR), varcharConstant("OPEN")));
+        Map<String, ColumnHandle> assignments = Map.of("status", column("status", VARCHAR_TYPE_HANDLE, VARCHAR));
+
+        assertThat(renderer.renderProjection(SESSION, comparison, assignments, capabilities)).isEmpty();
+
+        // Only the top-level shape is reserved for the baseline rewriter contract;
+        // the same comparison nested in a larger expression still renders
+        ConnectorExpression disjunction = new Call(
+                BOOLEAN,
+                StandardFunctions.OR_FUNCTION_NAME,
+                List.of(comparison, new Call(BOOLEAN, StandardFunctions.IS_NULL_FUNCTION_NAME, List.of(new Variable("status", VARCHAR)))));
+
+        assertThat(renderer.renderProjection(SESSION, disjunction, assignments, capabilities)).isPresent();
     }
 
     @Test
@@ -168,6 +344,14 @@ class TestTrinoRemoteSqlRenderer
     }
 
     private ParameterizedExpression render(ConnectorExpression expression, Map<String, ? extends ColumnHandle> assignments)
+    {
+        return render(expression, assignments, capabilities);
+    }
+
+    private ParameterizedExpression render(
+            ConnectorExpression expression,
+            Map<String, ? extends ColumnHandle> assignments,
+            TrinoRemoteCapabilities capabilities)
     {
         return renderer.renderExpression(SESSION, expression, Map.copyOf(assignments), capabilities)
                 .orElseThrow(() -> new AssertionError("Expected expression to be rendered: " + expression));

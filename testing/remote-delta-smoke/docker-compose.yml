@@ -19,19 +19,19 @@ services:
         echo "waiting for MinIO";
         sleep 2;
       done;
-      mc mb --ignore-existing local/delta-smoke'
+      mc mb --ignore-existing local/remote-delta-smoke'
 
   hive-metastore:
     build:
       context: ./hive-metastore
-    image: trino2trino-delta-smoke-hive:4.0.1
+    image: trino2trino-remote-delta-smoke-hive:4.0.1
     depends_on:
       minio-init:
         condition: service_completed_successfully
     environment:
       SERVICE_NAME: metastore
       DB_DRIVER: derby
-      HIVE_CUSTOM_CONF_DIR: /delta-smoke/hive-conf
+      HIVE_CUSTOM_CONF_DIR: /remote-delta-smoke/hive-conf
       HADOOP_CLASSPATH: /opt/hadoop/share/hadoop/tools/lib/*
       SERVICE_OPTS: >-
         -Dhive.metastore.warehouse.dir=file:///tmp/hive/warehouse
@@ -43,7 +43,7 @@ services:
         -Dfs.s3a.path.style.access=true
         -Dfs.s3a.connection.ssl.enabled=false
     volumes:
-      - ./conf/hive:/delta-smoke/hive-conf:ro
+      - ./conf/hive:/remote-delta-smoke/hive-conf:ro
     ports:
       - "19083:9083"
 
@@ -56,7 +56,7 @@ services:
         condition: service_completed_successfully
     volumes:
       - ./conf/remote/catalog:/etc/trino/catalog:ro
-      - ./sql:/delta-smoke/sql:ro
+      - ./sql:/remote-delta-smoke/sql:ro
     ports:
       - "19080:8080"
 
@@ -67,6 +67,6 @@ services:
     volumes:
       - ../../target/trino-trino-448:/usr/lib/trino/plugin/trino:ro
       - ./conf/local/catalog:/etc/trino/catalog:ro
-      - ./sql:/delta-smoke/sql:ro
+      - ./sql:/remote-delta-smoke/sql:ro
     ports:
       - "18080:8080"

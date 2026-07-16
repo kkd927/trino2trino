@@ -1,0 +1,27 @@
+services:
+  trino-remote-version:
+    image: "trinodb/trino:${REMOTE_TRINO_VERSION:?set REMOTE_TRINO_VERSION}"
+    mem_limit: "${REMOTE_VERSION_SMOKE_MEMORY_LIMIT:-1536m}"
+    cpus: "${REMOTE_VERSION_SMOKE_CPU_LIMIT:-2.0}"
+    entrypoint: ["/bin/bash", "/opt/trino-smoke/start-trino.sh"]
+    environment:
+      SMOKE_PLUGINS: "memory,tpch"
+    volumes:
+      - ./conf/common/config.properties:/etc/trino/config.properties:ro
+      - ./start-trino.sh:/opt/trino-smoke/start-trino.sh:ro
+      - ./conf/remote/catalog:/etc/trino/catalog:ro
+
+  trino-local-version:
+    image: "trinodb/trino:${LOCAL_TRINO_VERSION:?set LOCAL_TRINO_VERSION}"
+    mem_limit: "${REMOTE_VERSION_SMOKE_MEMORY_LIMIT:-1536m}"
+    cpus: "${REMOTE_VERSION_SMOKE_CPU_LIMIT:-2.0}"
+    entrypoint: ["/bin/bash", "/opt/trino-smoke/start-trino.sh"]
+    environment:
+      SMOKE_PLUGINS: "trino"
+    depends_on:
+      - trino-remote-version
+    volumes:
+      - ./conf/common/config.properties:/etc/trino/config.properties:ro
+      - ./start-trino.sh:/opt/trino-smoke/start-trino.sh:ro
+      - "../../target/trino-trino-${LOCAL_TRINO_VERSION:?set LOCAL_TRINO_VERSION}:/usr/lib/trino/plugin/trino:ro"
+      - ./conf/local/catalog:/etc/trino/catalog:ro

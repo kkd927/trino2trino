@@ -15,6 +15,7 @@ commands.
 - Work only in this repository.
 - Stop on dirty working trees, unsynchronized `main`, missing Trino versions, or
   missing/incompatible local JDKs.
+- Inspect both local and remote `trino-N-rK` tags before reporting the next tag.
 - Use `release/trino-N` branches and `trino-N-rK` tags in reports, but do not
   create or push tags.
 - Start backports from `main`, not from an existing older release branch.
@@ -49,7 +50,9 @@ commands.
    `release_branch_for_current_exists_origin`,
    `release_branch_for_current_local_sha`,
    `release_branch_for_current_origin_sha`, `preserve_branch_push_needed`,
-   `existing_tags`, and `next_tag`.
+   `local_existing_tags`, `remote_existing_tags`, `existing_tags`, and
+   `next_tag`. `existing_tags` is the de-duplicated union of local and remote
+   release tags.
 6. Enforce the common JDK gate before editing:
    if `local_java_major != target_jdk`, tell the user to install/select the
    target major JDK, for example with `sdk install java <major>` or
@@ -94,21 +97,46 @@ commands.
    diff, then rerun `mvn clean verify`. If Checkstyle reports a mechanical
    source-modernization rule from the new Trino/Airlift parent, make the
    smallest syntax-only change and rerun the failing Maven stage.
-8. If Docker is available, check whether the upstream image exists:
+8. Run the strict same-version remote Delta smoke release gate:
 
    ```bash
    docker manifest inspect "trinodb/trino:${requested_version}" >/dev/null
    ```
 
-   When the image exists and `testing/delta-smoke/run.sh` is present, run:
+   Fail the release preparation with an exact reason if Docker is unavailable,
+   `testing/remote-delta-smoke/run.sh` is missing, or
+   `trinodb/trino:${requested_version}` has no Docker image manifest. Otherwise
+   run:
 
    ```bash
-   testing/delta-smoke/run.sh
+   testing/remote-delta-smoke/run.sh
    ```
 
-   If Docker, the image, or the smoke script is unavailable, report that it was
-   skipped with the exact reason.
-9. Commit on `main`:
+   If the smoke fails, stop the release preparation and record the failing
+   command and `target/remote-delta-smoke/` log directory.
+9. Run the remote version smoke release gate:
+   - Select remote version smoke versions:
+
+     ```bash
+     read -r -a remote_version_smoke_versions < <("${skill_dir}/scripts/select-remote-version-smoke-versions.sh" "$requested_version")
+     ```
+
+   - Fail the release preparation with an exact reason if Docker is unavailable,
+     `testing/remote-version-smoke/run.sh` is missing, or either
+     `trinodb/trino:${requested_version}` or `trinodb/trino:${remote_version}`
+     has no Docker image manifest.
+   - Otherwise run:
+
+     ```bash
+     testing/remote-version-smoke/run.sh "$remote_version"
+     ```
+
+   - If the smoke fails, stop the release preparation. Record the remote
+     version, the failing command, and the log directory
+     `target/remote-version-smoke/${requested_version}-to-${remote_version}/`.
+   - Report this only as a bounded remote version smoke gate, not as a cross-version
+     compatibility guarantee.
+10. Commit on `main`:
 
    ```bash
    git commit -am "Upgrade connector to Trino N"
@@ -116,8 +144,10 @@ commands.
 
    Include new files with `git add` first if code adaptation created them. Do
    not commit on `release/trino-M`.
-10. Final report:
+11. Final report:
     - summarize changes, tests, and release-note items that affected code;
+    - summarize remote Delta smoke and remote version smoke results, including
+      selected remote versions and any failing command or log location;
     - print `git push origin release/trino-M` only when
       `preserve_branch_push_needed=true`;
     - print `git push origin main`;
@@ -127,47 +157,112 @@ commands.
 ## Case B: Backport (`requested_version < current_version`)
 
 1. If either `release_branch_exists_local=true` or
-   `release_branch_exists_origin=true`, stop. Report `existing_tags` and print
-   only the re-release command using `next_tag`, after switching/updating that
-   existing release branch manually.
-2. Create and switch to the backport branch from `main`:
+   `release_branch_exists_origin=true`, stop. Report `local_existing_tags`,
+   `remote_existing_tags`, and `existing_tags`, then print only the re-release
+   command using `next_tag`, after switching/updating that existing release
+   branch manually.
+2. Before branching or editing, run a backport impact review from `main`:
+
+   ```bash
+   "${skill_dir}/scripts/backport-impact.sh" "$requested_version" "$current_version"
+   ```
+
+   Use the helper output as evidence, not as an automatic decision. Review
+   official release notes in `(N, M]` for features added after N that current
+   `main` may depend on. Prioritize `Add the ... type`, `Add support for`,
+   `Breaking change`, `Remove`, `Defunct`, `SPI`, `JDBC driver`, Base JDBC,
+   connector API, configuration property, and Airlift lines. Search current
+   source, tests, docs, and smoke configs for matching Trino APIs, types,
+   properties, and EXPLAIN markers. Classify each likely issue before editing:
+   - `must-remove`: type/API/feature first introduced after N, so unavailable in N.
+   - `signature-risk`: connector or SPI method signatures changed across the gap.
+   - `runtime-config-risk`: Docker/catalog/session properties may not exist in N.
+   - `test-expectation-risk`: plan text or pushdown markers differ by version.
+   - `needs-compile-confirmation`: release notes are suggestive but not decisive.
+
+   Summarize expected removals/adaptations to the user before the version bump.
+   For example, if release notes say a type was added in a version greater than
+   N and current code references that type, plan to remove or disable it on the
+   backport branch, then confirm with the target Trino artifacts and compiler.
+3. Create and switch to the backport branch from `main`:
 
    ```bash
    git switch -c "release/trino-N"
    ```
 
-3. Run:
+4. Run:
 
    ```bash
    "${skill_dir}/scripts/bump-version.sh" "$current_version" "$requested_version" "$target_jdk"
    ```
 
-4. Run `.github/scripts/bootstrap-trino-deps.sh`.
-5. Build in two stages:
+5. Run `.github/scripts/bootstrap-trino-deps.sh`.
+6. Build in two stages:
 
    ```bash
    mvn clean verify -DskipTests -Dair.check.skip-all=true
    mvn clean verify
    ```
 
-6. If compilation fails because current `main` code uses APIs missing from Trino
-   N, inspect only the necessary release notes in `(N, M]` in reverse,
-   error-driven order. For large gaps, do not fetch every release note up front.
-   Make the minimal compatibility changes required. If the full verify fails
-   only because `airstyle:check` reports formatting drift, run
+7. Use the impact review and the actual compiler/test errors to make the minimal
+   compatibility changes required. If compilation fails because current `main`
+   code uses APIs missing from Trino N, inspect only the additional release notes
+   or upstream sources needed to explain the failing symbols. If the full verify
+   fails only because `airstyle:check` reports formatting drift, run
    `mvn airstyle:format`, review the resulting diff, then rerun
    `mvn clean verify`. If Checkstyle reports a mechanical
    source-modernization rule from the selected Trino/Airlift parent, make the
    smallest syntax-only change and rerun the failing Maven stage.
-7. Commit on the backport branch:
+8. Run the strict same-version remote Delta smoke release gate:
+
+   ```bash
+   docker manifest inspect "trinodb/trino:${requested_version}" >/dev/null
+   ```
+
+   Fail the release preparation with an exact reason if Docker is unavailable,
+   `testing/remote-delta-smoke/run.sh` is missing, or
+   `trinodb/trino:${requested_version}` has no Docker image manifest. Otherwise
+   run:
+
+   ```bash
+   testing/remote-delta-smoke/run.sh
+   ```
+
+   If the smoke fails, stop the release preparation and record the failing
+   command and `target/remote-delta-smoke/` log directory.
+9. Run the remote version smoke release gate:
+   - Select remote version smoke versions:
+
+     ```bash
+     read -r -a remote_version_smoke_versions < <("${skill_dir}/scripts/select-remote-version-smoke-versions.sh" "$requested_version")
+     ```
+
+   - Fail the release preparation with an exact reason if Docker is unavailable,
+     `testing/remote-version-smoke/run.sh` is missing, or either
+     `trinodb/trino:${requested_version}` or `trinodb/trino:${remote_version}`
+     has no Docker image manifest.
+   - Otherwise run:
+
+     ```bash
+     testing/remote-version-smoke/run.sh "$remote_version"
+     ```
+
+   - If the smoke fails, stop the release preparation. Record the remote
+     version, the failing command, and the log directory
+     `target/remote-version-smoke/${requested_version}-to-${remote_version}/`.
+   - Report this only as a bounded remote version smoke gate, not as a cross-version
+     compatibility guarantee.
+10. Commit on the backport branch:
 
    ```bash
    git commit -am "Build against Trino N"
    ```
 
    Include new files with `git add` first if code adaptation created them.
-8. Final report:
-   - summarize changes and tests;
+11. Final report:
+   - summarize changes, tests, and release-note evidence that affected code;
+   - summarize remote Delta smoke and remote version smoke results, including
+     selected remote versions and any failing command or log location;
    - print `git push origin release/trino-N`;
    - print `git tag <next_tag> && git push origin <next_tag>`;
    - state that `main` was not changed and pushing the tag triggers GitHub
@@ -187,8 +282,8 @@ The deterministic bump script owns these version references:
 - `docker-compose.yml`
 - `CONTRIBUTING.md`
 - `docs/src/main/sphinx/connector/trino.md`
-- `docs/delta-smoke.md`
-- `testing/delta-smoke/docker-compose.yml`
-- `testing/delta-smoke/run.sh`
+- `docs/remote-delta-smoke.md`
+- `testing/remote-delta-smoke/docker-compose.yml`
+- `testing/remote-delta-smoke/run.sh`
 
 If new versioned files appear, the residual reference scan should expose them.
