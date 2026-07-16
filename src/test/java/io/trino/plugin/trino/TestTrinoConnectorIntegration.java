@@ -13,11 +13,14 @@
  */
 package io.trino.plugin.trino;
 
-import io.trino.testing.AbstractTestQueryFramework;
+import io.trino.Session;
+import io.trino.sql.planner.plan.TopNNode;
 import io.trino.testing.MaterializedResult;
-import io.trino.testing.QueryRunner;
 import org.junit.jupiter.api.Test;
 
+import java.util.Locale;
+
+import static io.trino.spi.type.TimeZoneKey.getTimeZoneKey;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -28,18 +31,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * all type mappings, complex types, cross-catalog joins, and edge cases.
  * <p>
  * "remote" catalog = trino2trino connector → remote Trino (tpch + memory)
+ * "remote_tpch" catalog = trino2trino connector → remote Trino TPCH (statistics tests)
  * "tpch" catalog = local tpch (for cross-catalog join comparison)
  */
-public class TestTrinoConnectorIntegration
-        extends AbstractTestQueryFramework
+abstract class TestTrinoConnectorIntegration
+        extends AbstractTestTrinoTypeMapping
 {
-    @Override
-    protected QueryRunner createQueryRunner()
-            throws Exception
-    {
-        return TrinoQueryRunner.createQueryRunner();
-    }
-
     // =========================================================================
     // 1. Basic connectivity
     // =========================================================================
@@ -52,14 +49,14 @@ public class TestTrinoConnectorIntegration
     }
 
     @Test
-    void testShowSchemas()
+    void testIntegrationShowSchemas()
     {
         MaterializedResult result = computeActual("SHOW SCHEMAS FROM remote");
         assertThat(result.getOnlyColumnAsSet()).contains("default", "alt", "information_schema");
     }
 
     @Test
-    void testShowTables()
+    void testIntegrationShowTables()
     {
         MaterializedResult result = computeActual("SHOW TABLES FROM remote.default");
         assertThat(result.getOnlyColumnAsSet()).contains("nation", "region", "orders");
@@ -168,7 +165,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testCrossCatalogJoin()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT r.name AS remote_name, l.name AS local_name
                 FROM remote.default.region r
                 JOIN tpch.tiny.region l ON r.regionkey = l.regionkey
@@ -184,7 +182,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testCrossCatalogJoinWithFilter()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT n.name
                 FROM remote.default.nation n
                 JOIN tpch.tiny.region r ON n.regionkey = r.regionkey
@@ -282,6 +281,29 @@ public class TestTrinoConnectorIntegration
         assertThat(result.getMaterializedRows().get(1).getField(0)).isNull();
     }
 
+    @Test
+    void testJsonTransportPreservesNullRow()
+    {
+        Session delegationOff = Session.builder(getSession())
+                .setCatalogSessionProperty("remote", "remote_delegation_enabled", "false")
+                .build();
+
+        assertThat(query(delegationOff, "SELECT id FROM remote.default.test_row_temporal_null WHERE x IS NULL"))
+                .matches("VALUES 1");
+
+        MaterializedResult rows = computeActual(
+                delegationOff,
+                "SELECT id, x FROM remote.default.test_row_temporal_null ORDER BY id");
+        assertThat(rows.getMaterializedRows().get(0).getField(1)).isNull();
+        assertThat(rows.getMaterializedRows().get(1).getField(1)).isNotNull();
+        assertThat(rows.getMaterializedRows().get(2).getField(1)).isNotNull();
+
+        assertThat(query(
+                delegationOff,
+                "SELECT x[1] IS NULL, x[2] IS NULL FROM remote.default.test_array_row_temporal_null"))
+                .matches("VALUES (true, false)");
+    }
+
     // =========================================================================
     // 8. Deeply nested complex types
     // =========================================================================
@@ -301,7 +323,8 @@ public class TestTrinoConnectorIntegration
     void testRowContainingArrayOfMap()
     {
         // row(svc varchar, evts array(map(varchar, varchar))) — nested complex type
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT
                     d.svc,
                     element_at(evt, 'type') AS evt_type
@@ -319,7 +342,8 @@ public class TestTrinoConnectorIntegration
     void testCrossJoinWithNestedUnnest()
     {
         // Full scenario: UNNEST complex type from remote + JOIN with local tpch
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT
                     element_at(evt, 'post_id') AS post_id,
                     n.name AS nation_name
@@ -375,7 +399,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testQueryPassthrough()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT * FROM TABLE(remote.system.query(
                     query => 'SELECT nationkey, name FROM memory.default.nation ORDER BY nationkey LIMIT 3'
                 ))
@@ -386,7 +411,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testQueryPassthroughWithAnonymousOutput()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT *
                 FROM TABLE(remote.system.query(
                     query => 'SELECT count(*) FROM memory.default.nation'
@@ -398,7 +424,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testQueryPassthroughCanUseFullyQualifiedRemoteSql()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT *
                 FROM TABLE(remote.system.query(
                     query => 'SELECT name FROM memory.default.nation WHERE nationkey = 0'
@@ -408,21 +435,40 @@ public class TestTrinoConnectorIntegration
     }
 
     @Test
-    void testQueryPassthroughRejectsOtherRemoteCatalog()
+    void testQueryPassthroughPreservesRemoteError()
     {
-        assertThatThrownBy(() -> computeActual("""
+        // A query that fails remote preparation (unknown table) must surface the
+        // remote error instead of a generic connector failure
+        assertThatThrownBy(() -> computeActual(
+                """
+                SELECT *
+                FROM TABLE(remote.system.query(
+                    query => 'SELECT x FROM memory.default.no_such_table_anywhere'
+                ))
+                """))
+                .hasMessageContaining("no_such_table_anywhere");
+    }
+
+    @Test
+    void testQueryPassthroughCanReferenceOtherRemoteCatalog()
+    {
+        // Passthrough SQL is an explicit escape hatch from the 1:1 catalog mapping:
+        // it may reference any remote catalog the remote credentials can access
+        MaterializedResult result = computeActual(
+                """
                 SELECT *
                 FROM TABLE(remote.system.query(
                     query => 'SELECT name FROM tpch.tiny.nation WHERE nationkey = 0'
                 ))
-                """))
-                .hasMessageContaining("configured remote catalog 'memory'");
+                """);
+        assertThat(result.getOnlyValue()).isEqualTo("ALGERIA");
     }
 
     @Test
     void testQueryPassthroughWithCte()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT *
                 FROM TABLE(remote.system.query(
                     query => 'WITH ranked AS (
@@ -440,7 +486,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testQueryPassthroughWithWindowFunction()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT *
                 FROM TABLE(remote.system.query(
                     query => 'SELECT name, row_number() OVER (ORDER BY nationkey) AS rn
@@ -456,7 +503,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testQueryPassthroughNumberResult()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT CAST(x AS VARCHAR)
                 FROM TABLE(remote.system.query(
                     query => 'SELECT NUMBER ''0.1'' AS x'
@@ -468,7 +516,8 @@ public class TestTrinoConnectorIntegration
     @Test
     void testQueryPassthroughUnsupportedStructuralResult()
     {
-        MaterializedResult result = computeActual("""
+        MaterializedResult result = computeActual(
+                """
                 SELECT CAST(element_at(m, 2) AS VARCHAR)
                 FROM TABLE(remote.system.query(
                     query => 'SELECT MAP(ARRAY[1, 2], ARRAY[INTERVAL ''1'' DAY, INTERVAL ''2'' DAY]) AS m'
@@ -477,12 +526,54 @@ public class TestTrinoConnectorIntegration
         assertThat(result.getOnlyValue()).isEqualTo("2 00:00:00.000");
     }
 
+    @Test
+    void testQueryPassthroughIntervalResults()
+    {
+        assertThat(query(
+                """
+                SELECT day_interval, month_interval
+                FROM TABLE(remote.system.query(
+                    query => 'SELECT INTERVAL ''1'' DAY AS day_interval, INTERVAL ''14'' MONTH AS month_interval'
+                ))
+                """))
+                .matches("VALUES (INTERVAL '1' DAY, INTERVAL '14' MONTH)");
+
+        assertThat(query(
+                """
+                SELECT day_interval, month_interval
+                FROM TABLE(remote.system.query(
+                    query => 'SELECT CAST(NULL AS INTERVAL DAY TO SECOND) AS day_interval, CAST(NULL AS INTERVAL YEAR TO MONTH) AS month_interval'
+                ))
+                """))
+                .matches("VALUES (CAST(NULL AS INTERVAL DAY TO SECOND), CAST(NULL AS INTERVAL YEAR TO MONTH))");
+    }
+
+    @Test
+    void testQueryPassthroughTrailingSemicolon()
+    {
+        assertThat(query("SELECT * FROM TABLE(remote.system.query(query => 'SELECT 1 AS value;'))"))
+                .matches("VALUES 1");
+    }
+
+    @Test
+    void testQueryPassthroughExpandedPositiveTimestampYear()
+    {
+        assertThat(query(
+                """
+                SELECT CAST(value AS VARCHAR)
+                FROM TABLE(remote.system.query(
+                    query => 'SELECT CAST(TIMESTAMP ''+10000-01-01 00:00:00.123456789012'' AS TIMESTAMP(12)) AS value'
+                ))
+                """))
+                .matches("VALUES CAST('+10000-01-01 00:00:00.123456789012' AS VARCHAR)");
+    }
+
     // =========================================================================
     // 12. DESCRIBE
     // =========================================================================
 
     @Test
-    void testDescribeTable()
+    void testIntegrationDescribeTable()
     {
         MaterializedResult result = computeActual("DESCRIBE remote.default.nation");
         assertThat(result.getRowCount()).isGreaterThan(0);
@@ -511,6 +602,19 @@ public class TestTrinoConnectorIntegration
                 .isPresent();
     }
 
+    @Test
+    void testStatisticsDisabledConfig()
+    {
+        // Baseline: remote statistics feed optimizer estimates when enabled (default)
+        String enabled = computeActual("EXPLAIN SELECT nationkey FROM remote.default.nation").getOnlyValue().toString();
+        assertThat(enabled).contains("rows: 25");
+
+        // Regression: statistics.enabled was bound but ignored, so remote SHOW STATS
+        // statistics flowed into estimates even when disabled
+        String disabled = computeActual("EXPLAIN SELECT nationkey FROM remote_stats_disabled.default.nation").getOnlyValue().toString();
+        assertThat(disabled).doesNotContain("rows: 25");
+    }
+
     // =========================================================================
     // 13. Pushdown verification
     //
@@ -519,14 +623,14 @@ public class TestTrinoConnectorIntegration
     // =========================================================================
 
     @Test
-    void testLimitPushdown()
+    void testIntegrationLimitPushdown()
     {
         MaterializedResult result = computeActual("SELECT nationkey FROM remote.default.nation LIMIT 3");
         assertThat(result.getRowCount()).isEqualTo(3);
     }
 
     @Test
-    void testTopNPushdown()
+    void testIntegrationTopNPushdown()
     {
         // Verify ORDER BY + LIMIT produces correct, ordered results matching local tpch
         MaterializedResult remote = computeActual(
@@ -537,7 +641,7 @@ public class TestTrinoConnectorIntegration
     }
 
     @Test
-    void testAggregationPushdown()
+    void testIntegrationAggregationPushdown()
     {
         // Verify aggregation results match local tpch exactly
         MaterializedResult remoteCount = computeActual(
@@ -593,17 +697,19 @@ public class TestTrinoConnectorIntegration
     }
 
     @Test
-    void testJoinPushdown()
+    void testIntegrationJoinPushdown()
     {
         // Join between two tables on the same remote catalog — verify results match local
-        MaterializedResult remote = computeActual("""
+        MaterializedResult remote = computeActual(
+                """
                 SELECT n.name, r.name AS region_name
                 FROM remote.default.nation n
                 JOIN remote.default.region r ON n.regionkey = r.regionkey
                 WHERE r.name = 'EUROPE'
                 ORDER BY n.name
                 """);
-        MaterializedResult local = computeActual("""
+        MaterializedResult local = computeActual(
+                """
                 SELECT n.name, r.name AS region_name
                 FROM tpch.tiny.nation n
                 JOIN tpch.tiny.region r ON n.regionkey = r.regionkey
@@ -614,9 +720,307 @@ public class TestTrinoConnectorIntegration
     }
 
     @Test
-    void testComplexFunctionRemoteDelegation()
+    void testAutomaticJoinPushdownUsesRemoteStatistics()
     {
-        String sql = """
+        String sql =
+                """
+                SELECT *
+                FROM remote_tpch.tiny.nation n
+                JOIN remote_tpch.tiny.region r ON n.regionkey = r.regionkey
+                """;
+
+        Session restrictive = Session.builder(getSession())
+                .setCatalog("remote_tpch")
+                .setSchema("tiny")
+                .setCatalogSessionProperty("remote_tpch", "join_pushdown_strategy", "AUTOMATIC")
+                .setCatalogSessionProperty("remote_tpch", "join_pushdown_automatic_max_join_to_tables_ratio", "0")
+                .build();
+        assertThat(query(restrictive, sql)).joinIsNotFullyPushedDown();
+
+        Session permissive = Session.builder(restrictive)
+                .setCatalogSessionProperty("remote_tpch", "join_pushdown_automatic_max_join_to_tables_ratio", "100")
+                .build();
+        assertThat(query(permissive, sql)).isFullyPushedDown();
+    }
+
+    @Test
+    void testAutomaticJoinPushdownRequiresColumnStatistics()
+    {
+        MaterializedResult nationStats = computeActual("SHOW STATS FOR remote.default.nation");
+        var tableStats = nationStats.getMaterializedRows().stream()
+                .filter(row -> row.getField(0) == null)
+                .findFirst()
+                .orElseThrow();
+        assertThat(tableStats.getField(4)).isNotNull();
+
+        var joinKeyStats = nationStats.getMaterializedRows().stream()
+                .filter(row -> "regionkey".equals(row.getField(0)))
+                .findFirst()
+                .orElseThrow();
+        assertThat(joinKeyStats.getField(2)).isNull();
+
+        String sql =
+                """
+                SELECT *
+                FROM remote.default.nation n
+                JOIN remote.default.region r ON n.regionkey = r.regionkey
+                """;
+
+        Session eager = Session.builder(getSession())
+                .setCatalog("remote")
+                .setSchema("default")
+                .setCatalogSessionProperty("remote", "join_pushdown_strategy", "EAGER")
+                .build();
+        assertThat(query(eager, sql)).isFullyPushedDown();
+
+        Session automatic = Session.builder(eager)
+                .setCatalogSessionProperty("remote", "join_pushdown_strategy", "AUTOMATIC")
+                .setCatalogSessionProperty("remote", "join_pushdown_automatic_max_join_to_tables_ratio", "100")
+                .build();
+        assertThat(query(automatic, sql)).joinIsNotFullyPushedDown();
+    }
+
+    @Test
+    void testJoinPushdownWithTransportColumn()
+    {
+        // Regression: the transport projection (CAST wrapping) used to be applied both when
+        // synthesizing join sources and again at final scan, so a JSON-transport column
+        // selected through a pushed-down join failed remotely (cast of already-cast varchar)
+        Session eagerJoinPushdown = Session.builder(getSession())
+                .setCatalogSessionProperty("remote", "join_pushdown_strategy", "EAGER")
+                .build();
+        String sql =
+                """
+                SELECT b.id, a.unsupported_col
+                FROM remote.default.test_nested_unsupported_array a
+                JOIN remote.default.test_nested_unsupported_map b ON a.id = b.id
+                """;
+        assertThat(query(eagerJoinPushdown, sql)).isFullyPushedDown();
+        MaterializedResult result = computeActual(eagerJoinPushdown, sql);
+        assertThat(result.getRowCount()).isEqualTo(1);
+        assertThat(result.getMaterializedRows().get(0).getField(0)).isEqualTo("id1");
+        assertThat(result.getMaterializedRows().get(0).getField(1).toString()).contains("10:30:45.123+09:00");
+    }
+
+    @Test
+    void testComplexFunctionDelegationKeepsLocaleSensitiveFilterLocal()
+    {
+        String sql =
+                """
+                SELECT regexp_extract(path, '/post/([0-9]+)', 1)
+                FROM remote.default.test_delegation_log
+                WHERE date_format(CAST(log_timestamp AS timestamp), '%Y-%m-%d') = '2024-01-15'
+                    AND regexp_like(path, '^/post/')
+                ORDER BY 1
+                """;
+
+        MaterializedResult result = computeActual(sql);
+        assertThat(result.getOnlyColumnAsSet()).containsExactly("100", "200");
+
+        String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
+        assertThat(explain).contains("ScanFilterProject");
+        assertThat(explain).contains("filterPredicate = (date_format");
+        assertThat(explain).contains("constraints=[ParameterizedExpression[expression=regexp_like");
+    }
+
+    @Test
+    void testDateTruncProjectionRemoteDelegation()
+    {
+        String sql =
+                """
+                SELECT CAST(date_trunc('day', CAST(log_timestamp AS timestamp)) AS VARCHAR)
+                FROM remote.default.test_delegation_log
+                WHERE regexp_like(path, '^/post/')
+                ORDER BY 1
+                """;
+
+        MaterializedResult result = computeActual(sql);
+        assertThat(result.getMaterializedRows())
+                .extracting(row -> row.getField(0))
+                .containsExactly("2024-01-15 00:00:00.000", "2024-01-15 00:00:00.000");
+
+        String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
+        assertThat(explain).contains("remote:Query[");
+        assertThat(explain).contains("date_trunc");
+        assertThat(explain).doesNotContain("ScanFilterProject");
+    }
+
+    @Test
+    void testCharVarcharPredicateRemoteDelegation()
+    {
+        String sql =
+                """
+                SELECT id
+                FROM remote.default.test_char_varchar_predicate
+                WHERE v = c
+                ORDER BY id
+                """;
+
+        MaterializedResult result = computeActual(sql);
+        assertThat(result.getOnlyColumnAsSet()).containsExactly(1, 2, 3);
+
+        String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
+        assertThat(explain).contains("constraints=[ParameterizedExpression[expression=(CAST(\"v\" AS char(65536)) = CAST(\"c\" AS char(65536)))");
+        assertThat(explain).doesNotContain("ScanFilterProject");
+    }
+
+    @Test
+    void testRemoteDelegationDisabled()
+    {
+        Session delegationOff = Session.builder(getSession())
+                .setCatalogSessionProperty("remote", "remote_delegation_enabled", "false")
+                .build();
+
+        // Queries keep working through the baseline rewriter path, with
+        // delegation-only expressions evaluated locally
+        MaterializedResult result = computeActual(
+                delegationOff,
+                "SELECT regexp_extract(path, '/post/([0-9]+)', 1) FROM remote.default.test_delegation_log WHERE regexp_like(path, '^/post/') ORDER BY 1");
+        assertThat(result.getOnlyColumnAsSet()).containsExactly("100", "200");
+        String explain = computeActual(
+                delegationOff,
+                "EXPLAIN SELECT path FROM remote.default.test_delegation_log WHERE regexp_like(path, '^/post/')")
+                .getOnlyValue().toString();
+        assertThat(explain).contains("ScanFilter");
+        assertThat(explain).contains("regexp_like");
+
+        // Baseline pushdown stays available: tuple-domain predicates, the standard
+        // comparison/arithmetic rewriter, and the aggregate rewriter
+        assertThat(query(delegationOff, "SELECT name FROM remote.default.nation WHERE nationkey = 1"))
+                .isFullyPushedDown();
+        assertThat(query(delegationOff, "SELECT name FROM remote.default.nation WHERE nationkey + 1 = 2"))
+                .isFullyPushedDown();
+        assertThat(query(delegationOff, "SELECT count(*) FROM remote.default.nation"))
+                .isFullyPushedDown();
+        assertThat(query(delegationOff, "SELECT sum(x) FROM remote.default.test_decimal"))
+                .isFullyPushedDown()
+                .matches("VALUES CAST(1123.44 AS DECIMAL(38, 2))");
+    }
+
+    @Test
+    void testLocaleSensitiveFormattingFallsBackLocally()
+    {
+        Session frenchSession = Session.builder(getSession())
+                .setLocale(Locale.FRANCE)
+                .build();
+        String expected = computeActual(
+                frenchSession,
+                "SELECT format_datetime(TIMESTAMP '2024-01-15 10:30:45.123', 'MMMM')")
+                .getOnlyValue()
+                .toString();
+
+        assertThat(computeActual(
+                frenchSession,
+                "SELECT format_datetime(CAST(log_timestamp AS timestamp), 'MMMM') FROM remote.default.test_delegation_log WHERE path = '/post/100'")
+                .getOnlyValue())
+                .isEqualTo(expected);
+    }
+
+    @Test
+    void testSessionStartDependentCastFallsBackLocally()
+    {
+        String remoteTimeZone = computeActual(
+                "SELECT * FROM TABLE(remote.system.query(query => 'SELECT current_timezone()'))")
+                .getOnlyValue()
+                .toString();
+        String localTimeZone = remoteTimeZone.toUpperCase(Locale.ENGLISH).contains("UTC") || remoteTimeZone.toUpperCase(Locale.ENGLISH).contains("GMT")
+                ? "Asia/Seoul"
+                : "UTC";
+        Session session = Session.builder(getSession())
+                .setTimeZoneKey(getTimeZoneKey(localTimeZone))
+                .build();
+
+        String expected = computeActual(
+                session,
+                "SELECT CAST(CAST(TIMESTAMP '2024-01-15 10:30:45.123' AS TIME(3) WITH TIME ZONE) AS VARCHAR)")
+                .getOnlyValue()
+                .toString();
+        assertThat(computeActual(
+                session,
+                "SELECT CAST(CAST(ts AS TIME(3) WITH TIME ZONE) AS VARCHAR) FROM remote.default.test_timestamp12_topn WHERE id = 'first'")
+                .getOnlyValue())
+                .isEqualTo(expected);
+    }
+
+    @Test
+    void testTransportTopNRetainsLocalOrdering()
+    {
+        assertThat(query("SELECT id FROM remote.default.test_timestamp12_topn ORDER BY ts DESC LIMIT 2"))
+                .ordered()
+                .matches("VALUES 'third', 'second'")
+                .isNotFullyPushedDown(TopNNode.class);
+
+        String transportExplain = computeActual(
+                "EXPLAIN SELECT id FROM remote.default.test_timestamp12_topn ORDER BY ts DESC LIMIT 2")
+                .getOnlyValue()
+                .toString();
+        assertThat(transportExplain).contains("sortOrder=[");
+        assertThat(transportExplain).contains("limit=2");
+
+        String nativeExplain = computeActual(
+                "EXPLAIN SELECT nationkey FROM remote.default.nation ORDER BY regionkey DESC LIMIT 2")
+                .getOnlyValue()
+                .toString();
+        assertThat(nativeExplain).contains("sortOrder=[");
+        assertThat(nativeExplain).contains("limit=2");
+    }
+
+    @Test
+    void testComplexConstantPredicateFallsBackLocally()
+    {
+        // Regression: a complex-typed constant in a delegated predicate was emitted as
+        // a QueryParameter with no bindable path, failing at scan time
+        MaterializedResult result = computeActual(
+                "SELECT path FROM remote.default.test_delegation_log WHERE contains(ARRAY[BIGINT '1', BIGINT '3'], regionkey) ORDER BY path");
+        assertThat(result.getOnlyColumnAsSet()).containsExactly("/post/100", "/post/200");
+    }
+
+    @Test
+    void testComplexConstantProjectionFallsBackLocally()
+    {
+        // Regression: same as above, through the projection path
+        MaterializedResult result = computeActual(
+                "SELECT concat(x, ARRAY[9, 9]) FROM remote.default.test_array_int");
+        assertThat(result.getOnlyColumnAsSet()).containsExactlyInAnyOrder(
+                java.util.List.of(1, 2, 3, 9, 9),
+                java.util.List.of(4, 5, 9, 9));
+    }
+
+    @Test
+    void testTimestamp12ConstantDelegationUsesTypedBinding()
+    {
+        assertThat(query(
+                """
+                SELECT date_diff(
+                    'second',
+                    TIMESTAMP '2024-01-15 10:30:45.123456789012',
+                    CAST(log_timestamp AS TIMESTAMP(12)))
+                FROM remote.default.test_delegation_log
+                WHERE path = '/post/100'
+                """))
+                .isFullyPushedDown()
+                .matches("VALUES BIGINT '0'");
+    }
+
+    @Test
+    void testUnsupportedScalarConstantsFallBackLocally()
+    {
+        assertQuery(
+                "SELECT contains(ARRAY[x], UUID '12345678-1234-1234-1234-123456789abc') FROM remote.default.test_uuid",
+                "VALUES true");
+        assertQuery(
+                "SELECT contains(ARRAY[x], IPADDRESS '192.168.1.1') FROM remote.default.test_ipaddress",
+                "VALUES true");
+        assertQuery(
+                "SELECT json_format(JSON '{\"key\":\"value\"}') FROM remote.default.test_json",
+                "VALUES '{\"key\":\"value\"}'");
+    }
+
+    @Test
+    void testFromIso8601TimestampFallsBackWhenRemoteTimeZoneDiffers()
+    {
+        String sql =
+                """
                 SELECT regexp_extract(path, '/post/([0-9]+)', 1)
                 FROM remote.default.test_delegation_log
                 WHERE date_trunc('day', CAST(log_timestamp AS timestamp)) = TIMESTAMP '2024-01-15 00:00:00'
@@ -629,14 +1033,15 @@ public class TestTrinoConnectorIntegration
         assertThat(result.getOnlyColumnAsSet()).containsExactly("100", "200");
 
         String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
-        assertThat(explain).contains("RemoteTrinoQuery[catalog=memory, delegated=true]");
-        assertThat(explain).doesNotContain("ScanFilterProject");
+        assertThat(explain).contains("ScanFilterProject");
+        assertThat(explain).contains("from_iso8601_timestamp");
     }
 
     @Test
     void testRemoteSubtreeDelegatedForLocalJoin()
     {
-        String sql = """
+        String sql =
+                """
                 SELECT r.name, pageviews.views
                 FROM tpch.tiny.region r
                 JOIN (
@@ -653,8 +1058,11 @@ public class TestTrinoConnectorIntegration
         assertThat(result.getMaterializedRows().getFirst().getField(0)).isEqualTo("AMERICA");
         assertThat(result.getMaterializedRows().getFirst().getField(1)).isEqualTo(2L);
 
+        // The remote subtree (filter + aggregation) is delegated: the remote branch
+        // collapses into a query relation scan and no local aggregation remains
         String explain = computeActual("EXPLAIN " + sql).getOnlyValue().toString();
-        assertThat(explain).contains("RemoteTrinoQuery[catalog=memory, delegated=true]");
+        assertThat(explain).contains("remote:Query[");
+        assertThat(explain).doesNotContain("Aggregate");
     }
 
     // =========================================================================
@@ -664,35 +1072,90 @@ public class TestTrinoConnectorIntegration
     @Test
     void testInsertBlocked()
     {
-        assertThatThrownBy(() -> computeActual("INSERT INTO remote.default.nation VALUES (99, 'TEST', 0, 'test')"))
-                .hasMessageContaining("does not support inserts");
+        assertAccessDenied("INSERT INTO remote.default.nation VALUES (99, 'TEST', 0, 'test')");
     }
 
     @Test
     void testCreateTableBlocked()
     {
-        assertThatThrownBy(() -> computeActual("CREATE TABLE remote.default.should_not_exist (id INTEGER)"))
-                .hasMessageContaining("does not support creating tables");
+        assertAccessDenied("CREATE TABLE remote.default.should_not_exist (id INTEGER)");
     }
 
     @Test
     void testDeleteBlocked()
     {
-        assertThatThrownBy(() -> computeActual("DELETE FROM remote.default.nation WHERE nationkey = 0"))
-                .hasMessageContaining("does not support deletes");
+        assertAccessDenied("DELETE FROM remote.default.nation WHERE nationkey = 0");
     }
 
     @Test
     void testUpdateBlocked()
     {
-        assertThatThrownBy(() -> computeActual("UPDATE remote.default.nation SET name = 'X' WHERE nationkey = 0"))
-                .hasMessageContaining("does not support updates");
+        assertAccessDenied("UPDATE remote.default.nation SET name = 'X' WHERE nationkey = 0");
     }
 
     @Test
     void testDropTableBlocked()
     {
-        assertThatThrownBy(() -> computeActual("DROP TABLE remote.default.nation"))
-                .hasMessageContaining("does not support dropping tables");
+        assertAccessDenied("DROP TABLE remote.default.nation");
+    }
+
+    @Test
+    void testCreateTableAsSelectBlocked()
+    {
+        assertAccessDenied("CREATE TABLE remote.default.should_not_exist_ctas AS SELECT 1 AS value");
+    }
+
+    @Test
+    void testMergeBlocked()
+    {
+        assertAccessDenied(
+                """
+                MERGE INTO remote.default.nation target
+                USING (VALUES (BIGINT '0', CAST('ALGERIA' AS VARCHAR), BIGINT '0', CAST('comment' AS VARCHAR))) source(nationkey, name, regionkey, comment)
+                ON target.nationkey = source.nationkey
+                WHEN MATCHED THEN UPDATE SET name = source.name
+                """);
+    }
+
+    @Test
+    void testTruncateBlocked()
+    {
+        assertAccessDenied("TRUNCATE TABLE remote.default.nation");
+    }
+
+    @Test
+    void testAlterTableAddColumnBlocked()
+    {
+        assertAccessDenied("ALTER TABLE remote.default.nation ADD COLUMN should_not_exist BIGINT");
+    }
+
+    @Test
+    void testCreateSchemaBlocked()
+    {
+        assertAccessDenied("CREATE SCHEMA remote.should_not_exist_schema");
+    }
+
+    @Test
+    void testDropSchemaBlocked()
+    {
+        assertAccessDenied("DROP SCHEMA remote.empty_schema");
+    }
+
+    @Test
+    void testCreateViewBlocked()
+    {
+        assertAccessDenied("CREATE VIEW remote.default.should_not_exist_view AS SELECT 1 AS value");
+    }
+
+    @Test
+    void testCommentOnTableBlocked()
+    {
+        assertAccessDenied("COMMENT ON TABLE remote.default.nation IS 'comment'");
+    }
+
+    private void assertAccessDenied(String sql)
+    {
+        assertThatThrownBy(() -> computeActual(sql))
+                .hasMessageContaining("Access Denied");
     }
 }

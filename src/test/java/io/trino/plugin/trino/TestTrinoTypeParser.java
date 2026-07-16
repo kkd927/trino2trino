@@ -259,6 +259,7 @@ class TestTrinoTypeParser
         assertThat(TrinoTypeClassifier.supportsComplexReadType(parse("map(varchar, ipaddress)"))).isTrue();
         assertThat(TrinoTypeClassifier.supportsComplexReadType(parse("array(number)"))).isTrue();
         assertThat(TrinoTypeClassifier.supportsComplexReadType(parse("row(x number)"))).isTrue();
+        assertThat(TrinoTypeClassifier.supportsComplexReadType(parse("array(time(0))"))).isTrue();
     }
 
     @Test
@@ -270,6 +271,24 @@ class TestTrinoTypeParser
         assertThat(TrinoTypeClassifier.supportsComplexReadType(parse("array(timestamp(6))"))).isFalse();
         assertThat(TrinoTypeClassifier.supportsComplexReadType(parse("array(timestamp(12))"))).isFalse();
         assertThat(TrinoTypeClassifier.supportsComplexReadType(parse("row(id uuid, ts timestamp(6) with time zone)"))).isFalse();
+        assertThat(TrinoTypeClassifier.supportsComplexReadType(parse("array(date)"))).isFalse();
+        assertThat(TrinoTypeClassifier.supportsComplexReadType(parse("array(time(1))"))).isFalse();
+        assertThat(TrinoTypeClassifier.supportsComplexReadType(parse("array(time(9))"))).isFalse();
+
+        assertThat(TrinoTypeClassifier.transportKind(parse("array(date)"))).isEqualTo(TrinoTypeClassifier.TransportKind.JSON_CAST);
+        assertThat(TrinoTypeClassifier.transportKind(parse("array(time(3))"))).isEqualTo(TrinoTypeClassifier.TransportKind.JSON_CAST);
+    }
+
+    @Test
+    void testJsonRowTransportPreservesNullRow()
+    {
+        JsonTransportHelper helper = new JsonTransportHelper(identifier -> "\"" + identifier + "\"");
+
+        assertThat(helper.buildJsonTransportExpression("\"row_value\"", parse("row(ts timestamp(3), name varchar)")))
+                .isEqualTo(
+                        "CASE WHEN \"row_value\" IS NULL THEN NULL ELSE ARRAY[" +
+                                "CAST((\"row_value\").\"ts\" AS VARCHAR), " +
+                                "CAST((\"row_value\").\"name\" AS VARCHAR)] END");
     }
 
     @Test

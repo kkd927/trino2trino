@@ -49,12 +49,9 @@ connection-url=jdbc:trino://remote-host:443/catalog_name?SSL=true
    * - ``unsupported-type-handling``
      - Final fallback for truly unsupported types: ``IGNORE`` or ``CONVERT_TO_VARCHAR``
      - ``CONVERT_TO_VARCHAR``
-   * - ``trino.remote-delegation.enabled``
+   * - ``remote-delegation.enabled``
      - Enable Trino-native SQL rendering for compatible remote fragments
      - ``true``
-   * - ``trino.remote-delegation.mode``
-     - Delegation policy: ``AUTO``, ``OFF``, or ``STRICT``
-     - ``AUTO``
 ```
 
 ## Querying
@@ -96,11 +93,13 @@ Native scalar reads include:
 - ``number``
 - ``char``, ``varchar``, ``varbinary``
 - ``date``
-- exact ``time(p)``, ``timestamp(p)``, ``timestamp(p) with time zone``
+- exact ``time(p<=9)`` and ``timestamp(p<=9)``
 - ``uuid``, ``json``, ``ipaddress``
 
 Native complex reads are allowed only when every descendant leaf is natively
-readable.
+readable. Date leaves, fractional ``time(p>0)`` leaves, and timestamp leaves at
+every precision use JSON transport because the JDBC complex-value
+representation cannot preserve them exactly.
 
 Examples:
 
@@ -114,9 +113,11 @@ Examples:
 Top-level scalar fallback currently covers:
 
 - ``time with time zone``
+- ``timestamp(p) with time zone`` at every precision; the wire value carries
+  the UTC instant and original zone ID separately
 - ``interval year to month``
 - ``interval day to second``
-- high-precision ``time(p)``, ``timestamp(p)``, and ``timestamp(p) with time zone`` when JDBC is not exact
+- high-precision ``time(p)`` and ``timestamp(p)`` when JDBC is not exact
 
 These columns still appear locally as their original logical Trino types.
 
@@ -129,6 +130,8 @@ original logical type locally.
 Examples:
 
 - ``array(timestamp(12))``
+- ``array(time(3))``
+- ``array(date)``
 - ``map(varchar, interval day to second)``
 - ``row(ts timestamp(12), attrs map(varchar, varchar))``
 
@@ -161,7 +164,7 @@ have a safe recursive transport contract.
 
 ## Query passthrough
 
-Execute manual row-returning read SQL on the remote Trino:
+Execute a manual top-level query statement on the remote Trino:
 
 ```sql
 SELECT *
@@ -174,12 +177,18 @@ FROM TABLE(
 
 ``system.query`` is an explicit bypass for the normal connector planning path:
 
-- the inner SQL string is sent to remote Trino as written
+- the inner SQL is sent without expression rewriting; the connector can strip
+  a trailing semicolon and wrap the query to assign stable output aliases
 - the connector still infers output columns and applies the normal type
   mapping and transport rules to the result
-- explicit table references must stay within the configured remote catalog
-- remote failures are returned directly; explicit passthrough SQL is not a
-  fallback candidate
+- only top-level query statements (``SELECT``, ``WITH``, ``VALUES``, ``TABLE``)
+  are accepted; this syntactic check does not prove that invoked functions or
+  table functions are free of side effects, so remote access control and
+  read-only credentials are the execution boundary
+- while normal table access maps 1:1 to the configured remote catalog,
+  passthrough SQL is an explicit escape hatch from that mapping
+- remote query preparation and execution failures are returned directly;
+  explicit passthrough SQL is not a fallback candidate
 
 ## SQL support
 
@@ -212,6 +221,12 @@ The connector provides read-only access.
      - No
    * - :doc:`CREATE SCHEMA </sql/create-schema>`
      - No
+   * - :doc:`DROP SCHEMA </sql/drop-schema>`
+     - No
+   * - :doc:`CREATE VIEW </sql/create-view>`
+     - No
+   * - ``COMMENT ON``
+     - No
 ```
 
 ## Performance
@@ -226,30 +241,24 @@ The connector supports:
   logic, arithmetic, ``LIKE``, ``IN``, regexp, JSON, date/time functions,
   dereference, subscript, and aggregation expressions
 - ``LIMIT`` pushdown
-- ``ORDER BY ... LIMIT`` pushdown
-- aggregation pushdown
+- partial ``ORDER BY ... LIMIT`` pushdown with local ordering verification
+- aggregation pushdown for ``count``, ``count distinct``, ``count_if``,
+  ``checksum``, ``min/max``, ``sum``, and ``avg`` on supported types
 - same-remote join pushdown for supported join shapes
 
-Remote delegation modes:
-
-- ``AUTO`` delegates compatible remote subtrees and leaves unsupported
-  expressions as local fallback when that preserves semantics
-- ``STRICT`` fails a remote subtree when it cannot be rendered for remote Trino
-- ``OFF`` disables the Trino-native renderer and leaves only the baseline JDBC
-  pushdown path enabled
-
-The equivalent catalog session properties are
-``remote_delegation_enabled`` and ``remote_delegation_mode``. ``EXPLAIN`` shows
-delegated query relations with a marker such as
-``RemoteTrinoQuery[catalog=memory, delegated=true]`` without inlining bind
-values.
+Remote delegation delegates compatible remote subtrees and leaves unsupported
+expressions as local fallback when that preserves semantics. Disabling it
+(``remote-delegation.enabled=false``) leaves only the baseline JDBC pushdown
+path enabled. The equivalent catalog session property is
+``remote_delegation_enabled``.
 
 Pushdown behavior for transport-backed columns is split:
 
 - scalar ``VARCHAR`` transport (``timestamp(p>9)``,
-  ``timestamp with time zone(p>9)``, ``time with time zone``, interval types)
+  ``timestamp(p) with time zone``, ``time with time zone``, interval types)
   keeps tuple-domain predicate pushdown enabled via typed bind expressions such
-  as ``CAST(? AS timestamp(12))`` or ``parse_duration(?)``
+  as ``CAST(? AS timestamp(12))`` or
+  ``INTERVAL '0.001' SECOND * CAST(? AS BIGINT)``
 - structural ``JSON`` transport remains ``DISABLE_PUSHDOWN``
 - sketch ``VARBINARY`` transport remains ``DISABLE_PUSHDOWN``
 
@@ -264,6 +273,10 @@ column.
 feeds the result into the local optimizer. If the remote side cannot provide
 statistics, the connector falls back to unknown statistics.
 
+``AUTOMATIC`` join pushdown requires remote column statistics, including the
+distinct-value count for join keys. If the remote catalog only reports a table
+row count, the join remains local.
+
 ## Security
 
 All remote SQL executes as the configured catalog-level credentials
@@ -276,16 +289,24 @@ Not supported:
 - role delegation
 - extra credential passthrough
 
-Session-sensitive functions such as ``current_timestamp``, ``current_date``,
-``current_time``, and current time zone functions are not delegated. Expressions
-with explicit time zone operands, such as ``AT TIME ZONE 'Asia/Seoul'``, can be
-delegated when the rendered SQL is otherwise compatible.
+Session-sensitive functions and casts such as ``current_timestamp``,
+``current_date``, ``current_time``, current time zone functions,
+locale-sensitive date formatting, and casts that depend on the session start
+date are evaluated locally. Time-zone-dependent expressions such as
+``from_iso8601_timestamp`` are delegated only when local and remote time zones
+match. Expressions with explicit time zone operands, such as ``AT TIME ZONE
+'Asia/Seoul'``, can be delegated when the rendered SQL is otherwise compatible.
 
 ## Limitations
 
 - Standard table access and metadata operations are read-only
-- ``system.query`` is documented only for row-returning read queries
-- Negative dates (before year 0001) are not preserved correctly through JDBC
+- ``system.query`` accepts only top-level query statements; top-level writes
+  (DDL, DML, ``CALL``) are rejected before remote execution, while functions
+  and table functions remain governed by remote access control
+- ``CALL system.execute(...)`` is inherited from the base JDBC framework but
+  is denied by this connector's read-only access control
+- Remote delegation probes ``CHAR`` to ``VARCHAR`` cast semantics and delegates
+  these casts only when the remote retains the padding expected by Trino 480
 - Cross-cluster joins can only be improved with pushdown and statistics; the
   connector cannot remove the structural cost of federating between clusters
 - Cross-version compatibility is not yet claimed
@@ -301,7 +322,8 @@ The test suite is centered on the generic contract exposed by remote Trino:
 - statistics
 - federation behavior
 
-An optional Docker-based Delta Lake smoke test is available for the production
-shape where a small federated Trino 480 cluster queries a separate Trino 480
-cluster with a Delta Lake catalog. It is intentionally outside the default
-``mvn verify`` path and is documented in ``docs/delta-smoke.md``.
+The default ``Build and Test`` CI workflow also runs a Docker-based remote Delta
+smoke test for the production shape where a small federated Trino 480 cluster
+queries a separate Trino 480 cluster with a Delta Lake catalog. It reuses the
+``target/trino-trino-480`` package produced by ``mvn -B clean verify`` and is
+documented in ``docs/remote-delta-smoke.md``.

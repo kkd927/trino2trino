@@ -16,6 +16,7 @@ package io.trino.plugin.trino;
 import io.trino.spi.type.ArrayType;
 import io.trino.spi.type.MapType;
 import io.trino.spi.type.RowType;
+import io.trino.spi.type.TimestampWithTimeZoneType;
 import io.trino.spi.type.Type;
 import io.trino.spi.type.VarbinaryType;
 import io.trino.spi.type.VarcharType;
@@ -67,7 +68,7 @@ final class JsonTransportHelper
                 fieldExpressions.add(buildStringSurrogateExpression(fieldReference, fieldType));
             }
         }
-        return "ARRAY[" + String.join(", ", fieldExpressions) + "]";
+        return "CASE WHEN " + reference + " IS NULL THEN NULL ELSE ARRAY[" + String.join(", ", fieldExpressions) + "] END";
     }
 
     static boolean usesJsonObjectKeyEncoding(MapType mapType)
@@ -85,6 +86,9 @@ final class JsonTransportHelper
 
     private String buildStringSurrogateExpression(String reference, Type type)
     {
+        if (type instanceof TimestampWithTimeZoneType) {
+            return TimestampWithTimeZoneTransport.readExpression(reference);
+        }
         if (TrinoTypeClassifier.isJsonType(type)) {
             return "json_format(" + reference + ")";
         }

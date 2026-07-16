@@ -54,9 +54,8 @@ local_java_major() {
   fi
 }
 
-join_by_comma() {
-  local IFS=,
-  printf '%s' "$*"
+join_lines_by_comma() {
+  awk 'NF { if (seen) printf ","; printf "%s", $0; seen = 1 }'
 }
 
 requested_version="${1:-}"
@@ -118,7 +117,6 @@ fi
 workflow_files=(
   ".github/workflows/build.yml"
   ".github/workflows/release.yml"
-  ".github/workflows/delta-smoke.yml"
 )
 
 current_jdks=()
@@ -129,8 +127,8 @@ for file in "${workflow_files[@]}"; do
   current_jdks+=("$value")
 done
 
-if [[ "${current_jdks[0]}" != "${current_jdks[1]}" || "${current_jdks[0]}" != "${current_jdks[2]}" ]]; then
-  fail "workflow java-version drift detected: ${workflow_files[0]}=${current_jdks[0]}, ${workflow_files[1]}=${current_jdks[1]}, ${workflow_files[2]}=${current_jdks[2]}"
+if [[ "${current_jdks[0]}" != "${current_jdks[1]}" ]]; then
+  fail "workflow java-version drift detected: ${workflow_files[0]}=${current_jdks[0]}, ${workflow_files[1]}=${current_jdks[1]}"
 fi
 current_jdk="${current_jdks[0]}"
 
@@ -180,28 +178,39 @@ else
   preserve_branch_push_needed="false"
 fi
 
-remote_tags=()
-while IFS= read -r tag; do
-  remote_tags+=("$tag")
-done < <(
+remote_tags="$(
   git ls-remote --tags --refs origin "trino-${requested_version}-r*" |
     awk '{print $2}' |
     sed 's#refs/tags/##' |
     sort -u
-)
+)"
 
-existing_tags=""
-if (( ${#remote_tags[@]} > 0 )); then
-  existing_tags="$(join_by_comma "${remote_tags[@]}")"
-fi
+local_tags="$(
+  git tag --list "trino-${requested_version}-r*" |
+    sort -u
+)"
+
+all_tags="$(
+  {
+    printf '%s\n' "$local_tags"
+    printf '%s\n' "$remote_tags"
+  } |
+    sed '/^$/d' |
+    sort -u
+)"
+
+local_existing_tags="$(printf '%s\n' "$local_tags" | join_lines_by_comma)"
+remote_existing_tags="$(printf '%s\n' "$remote_tags" | join_lines_by_comma)"
+existing_tags="$(printf '%s\n' "$all_tags" | join_lines_by_comma)"
 
 max_release=0
-for tag in ${remote_tags[@]+"${remote_tags[@]}"}; do
+while IFS= read -r tag; do
+  [[ -n "$tag" ]] || continue
   suffix="${tag#trino-${requested_version}-r}"
   if [[ "$suffix" =~ ^[0-9]+$ ]] && (( suffix > max_release )); then
     max_release="$suffix"
   fi
-done
+done <<< "$all_tags"
 next_tag="trino-${requested_version}-r$((max_release + 1))"
 
 cat <<EOF
@@ -223,6 +232,8 @@ release_branch_for_current_exists_origin=${release_branch_for_current_exists_ori
 release_branch_for_current_local_sha=${release_branch_for_current_local_sha}
 release_branch_for_current_origin_sha=${release_branch_for_current_origin_sha}
 preserve_branch_push_needed=${preserve_branch_push_needed}
+local_existing_tags=${local_existing_tags}
+remote_existing_tags=${remote_existing_tags}
 existing_tags=${existing_tags}
 next_tag=${next_tag}
 EOF

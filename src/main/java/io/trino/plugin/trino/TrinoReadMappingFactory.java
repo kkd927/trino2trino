@@ -17,6 +17,7 @@ import io.airlift.slice.Slices;
 import io.airlift.stats.TDigest;
 import io.trino.plugin.jdbc.ColumnMapping;
 import io.trino.plugin.jdbc.JdbcTypeHandle;
+import io.trino.plugin.jdbc.LongReadFunction;
 import io.trino.plugin.jdbc.ObjectReadFunction;
 import io.trino.plugin.jdbc.ObjectWriteFunction;
 import io.trino.plugin.jdbc.PredicatePushdownController;
@@ -42,8 +43,9 @@ import io.trino.spi.type.TypeManager;
 import io.trino.spi.type.UuidType;
 import io.trino.spi.type.VarcharType;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Types;
-import java.time.LocalTime;
 import java.util.Optional;
 import java.util.function.Function;
 
@@ -53,7 +55,7 @@ import static io.trino.plugin.jdbc.StandardColumnMappings.bigintColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.booleanColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.charReadFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.charWriteFunction;
-import static io.trino.plugin.jdbc.StandardColumnMappings.dateColumnMappingUsingLocalDate;
+import static io.trino.plugin.jdbc.StandardColumnMappings.dateWriteFunctionUsingLocalDate;
 import static io.trino.plugin.jdbc.StandardColumnMappings.decimalColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.doubleColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.integerColumnMapping;
@@ -68,6 +70,7 @@ import static io.trino.plugin.jdbc.TypeHandlingJdbcSessionProperties.getUnsuppor
 import static io.trino.plugin.jdbc.UnsupportedTypeHandling.CONVERT_TO_VARCHAR;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.type.CharType.createCharType;
+import static io.trino.spi.type.DateType.DATE;
 import static io.trino.spi.type.DecimalType.createDecimalType;
 import static io.trino.spi.type.TimeType.createTimeType;
 import static io.trino.spi.type.TimeWithTimeZoneType.createTimeWithTimeZoneType;
@@ -99,50 +102,28 @@ final class TrinoReadMappingFactory
             return Optional.of(TrinoNumberCodec.numberColumnMapping());
         }
 
-        switch (typeHandle.jdbcType()) {
-            case Types.BIT, Types.BOOLEAN:
-                return Optional.of(booleanColumnMapping());
-            case Types.TINYINT:
-                return Optional.of(tinyintColumnMapping());
-            case Types.SMALLINT:
-                return Optional.of(smallintColumnMapping());
-            case Types.INTEGER:
-                return Optional.of(integerColumnMapping());
-            case Types.BIGINT:
-                return Optional.of(bigintColumnMapping());
-            case Types.REAL:
-                return Optional.of(realColumnMapping());
-            case Types.DOUBLE:
-                return Optional.of(doubleColumnMapping());
-            case Types.DECIMAL, Types.NUMERIC:
-                return Optional.of(decimalColumnMapping(decimalType(typeHandle, logicalType), UNNECESSARY));
-            case Types.CHAR:
-                return Optional.of(charColumnMapping(typeHandle, logicalType));
-            case Types.VARCHAR, Types.LONGVARCHAR:
-                return Optional.of(varcharColumnMapping(varcharType(typeHandle, logicalType)));
-            case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY:
-                return Optional.of(varbinaryColumnMapping());
-            case Types.DATE:
-                return Optional.of(dateColumnMappingUsingLocalDate());
-            case Types.TIME:
-                return Optional.of(timeColumnMapping(typeHandle, typeName, logicalType));
-            case Types.TIMESTAMP:
-                return timestampReadMapping(typeHandle, typeName, normalizedTypeName, logicalType);
-            case Types.TIMESTAMP_WITH_TIMEZONE:
-                return timestampWithTimeZoneColumnMapping(typeHandle, typeName, logicalType);
-            case Types.ARRAY:
-                return transportMapping.isPresent() ? transportMapping : toArrayMapping(session, typeHandle, typeName);
-            case Types.JAVA_OBJECT:
-                return transportMapping.isPresent() ? transportMapping : toComplexTypeMapping(session, typeHandle, typeName, normalizedTypeName);
-            case Types.TIME_WITH_TIMEZONE:
-                return timeWithTimeZoneColumnMapping(typeHandle, typeName, logicalType);
-            case Types.OTHER:
-                break;
-            default:
-                break;
-        }
-
-        return transportMapping.isPresent() ? transportMapping : fallbackToVarchar(session, typeHandle);
+        return switch (typeHandle.jdbcType()) {
+            case Types.BIT, Types.BOOLEAN -> Optional.of(booleanColumnMapping());
+            case Types.TINYINT -> Optional.of(tinyintColumnMapping());
+            case Types.SMALLINT -> Optional.of(smallintColumnMapping());
+            case Types.INTEGER -> Optional.of(integerColumnMapping());
+            case Types.BIGINT -> Optional.of(bigintColumnMapping());
+            case Types.REAL -> Optional.of(realColumnMapping());
+            case Types.DOUBLE -> Optional.of(doubleColumnMapping());
+            case Types.DECIMAL, Types.NUMERIC -> Optional.of(decimalColumnMapping(decimalType(typeHandle, logicalType), UNNECESSARY));
+            case Types.CHAR -> Optional.of(charColumnMapping(typeHandle, logicalType));
+            case Types.VARCHAR, Types.LONGVARCHAR -> transportMapping.isPresent() ? transportMapping : Optional.of(varcharColumnMapping(varcharType(typeHandle, logicalType)));
+            case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY -> Optional.of(varbinaryColumnMapping());
+            case Types.DATE -> Optional.of(dateColumnMapping());
+            case Types.TIME -> Optional.of(timeColumnMapping(typeHandle, typeName, logicalType));
+            case Types.TIMESTAMP -> timestampReadMapping(typeHandle, typeName, normalizedTypeName, logicalType);
+            case Types.TIMESTAMP_WITH_TIMEZONE -> timestampWithTimeZoneColumnMapping(typeHandle, typeName, logicalType);
+            case Types.ARRAY -> transportMapping.isPresent() ? transportMapping : toArrayMapping(session, typeHandle, typeName);
+            case Types.JAVA_OBJECT -> transportMapping.isPresent() ? transportMapping : toComplexTypeMapping(session, typeHandle, typeName, normalizedTypeName);
+            case Types.TIME_WITH_TIMEZONE -> timeWithTimeZoneColumnMapping(typeHandle, typeName, logicalType);
+            case Types.OTHER -> transportMapping.isPresent() ? transportMapping : fallbackToVarchar(session, typeHandle);
+            default -> transportMapping.isPresent() ? transportMapping : fallbackToVarchar(session, typeHandle);
+        };
     }
 
     private ColumnMapping timeColumnMapping(JdbcTypeHandle typeHandle, String typeName, Type logicalType)
@@ -156,7 +137,7 @@ final class TrinoReadMappingFactory
         return ColumnMapping.longMapping(
                 timeType,
                 (rs, idx) -> TemporalTransportCodec.parseTimeToPicos(rs.getString(idx)),
-                (stmt, idx, picosOfDay) -> stmt.setObject(idx, "TIME '" + LocalTime.ofNanoOfDay(picosOfDay / 1_000L) + "'"),
+                TemporalTransportCodec.timeTransportWriteFunction(timeType),
                 FULL_PUSHDOWN);
     }
 
@@ -165,10 +146,10 @@ final class TrinoReadMappingFactory
         int timestampPrecision = extractTemporalPrecision(typeHandle, typeName, 3);
         if (normalizedTypeName.startsWith("timestamp") && normalizedTypeName.contains("with time zone")) {
             Type resolvedType = logicalType == null ? createTimestampWithTimeZoneType(timestampPrecision) : logicalType;
-            if (resolvedType instanceof TimestampWithTimeZoneType timestampWithTimeZoneType && timestampWithTimeZoneType.getPrecision() > 9) {
+            if (resolvedType instanceof TimestampWithTimeZoneType timestampWithTimeZoneType) {
                 return Optional.of(varcharTransportColumnMapping(timestampWithTimeZoneType));
             }
-            return toTimestampWithTimeZoneMapping(timestampPrecision);
+            return Optional.empty();
         }
 
         Type resolvedType = logicalType == null ? createTimestampType(timestampPrecision) : logicalType;
@@ -182,10 +163,10 @@ final class TrinoReadMappingFactory
     {
         int precision = extractTemporalPrecision(typeHandle, typeName, 3);
         Type resolvedType = logicalType == null ? createTimestampWithTimeZoneType(precision) : logicalType;
-        if (resolvedType instanceof TimestampWithTimeZoneType timestampWithTimeZoneType && timestampWithTimeZoneType.getPrecision() > 9) {
+        if (resolvedType instanceof TimestampWithTimeZoneType timestampWithTimeZoneType) {
             return Optional.of(varcharTransportColumnMapping(timestampWithTimeZoneType));
         }
-        return toTimestampWithTimeZoneMapping(precision);
+        return Optional.empty();
     }
 
     private Optional<ColumnMapping> timeWithTimeZoneColumnMapping(JdbcTypeHandle typeHandle, String typeName, Type logicalType)
@@ -196,23 +177,6 @@ final class TrinoReadMappingFactory
             return Optional.of(varcharTransportColumnMapping(timeWithTimeZoneType));
         }
         return Optional.empty();
-    }
-
-    private Optional<ColumnMapping> toTimestampWithTimeZoneMapping(int precision)
-    {
-        TimestampWithTimeZoneType type = createTimestampWithTimeZoneType(precision);
-        if (precision <= TimestampWithTimeZoneType.MAX_SHORT_PRECISION) {
-            return Optional.of(ColumnMapping.longMapping(
-                    type,
-                    (rs, idx) -> TemporalTransportCodec.parseShortTimestampWithTimeZone(rs.getString(idx)),
-                    TemporalTransportCodec.shortTimestampWithTimeZoneTransportWriteFunction(type),
-                    TrinoTypeClassifier.transportPredicatePushdownController(type)));
-        }
-        return Optional.of(ColumnMapping.objectMapping(
-                type,
-                ObjectReadFunction.of(LongTimestampWithTimeZone.class, (rs, idx) -> TemporalTransportCodec.parseLongTimestampWithTimeZone(rs.getString(idx))),
-                TemporalTransportCodec.longTimestampWithTimeZoneTransportWriteFunction(type),
-                TrinoTypeClassifier.transportPredicatePushdownController(type)));
     }
 
     private Optional<ColumnMapping> transportFallbackColumnMapping(Type logicalType)
@@ -243,13 +207,6 @@ final class TrinoReadMappingFactory
                     predicatePushdownController);
         }
         if (logicalType instanceof TimestampType timestampType) {
-            if (timestampType.isShort()) {
-                return ColumnMapping.longMapping(
-                        timestampType,
-                        (rs, idx) -> TemporalTransportCodec.parseShortTimestamp(rs.getString(idx)),
-                        TemporalTransportCodec.shortTimestampTransportWriteFunction(timestampType),
-                        predicatePushdownController);
-            }
             return ColumnMapping.objectMapping(
                     timestampType,
                     ObjectReadFunction.of(LongTimestamp.class, (rs, idx) -> TemporalTransportCodec.parseLongTimestamp(rs.getString(idx))),
@@ -260,14 +217,14 @@ final class TrinoReadMappingFactory
             if (timestampWithTimeZoneType.isShort()) {
                 return ColumnMapping.longMapping(
                         timestampWithTimeZoneType,
-                        (rs, idx) -> TemporalTransportCodec.parseShortTimestampWithTimeZone(rs.getString(idx)),
-                        TemporalTransportCodec.shortTimestampWithTimeZoneTransportWriteFunction(timestampWithTimeZoneType),
+                        (rs, idx) -> TimestampWithTimeZoneTransport.parseShortTimestampWithTimeZone(rs.getString(idx)),
+                        TimestampWithTimeZoneTransport.shortPredicateWriteFunction(timestampWithTimeZoneType),
                         predicatePushdownController);
             }
             return ColumnMapping.objectMapping(
                     timestampWithTimeZoneType,
-                    ObjectReadFunction.of(LongTimestampWithTimeZone.class, (rs, idx) -> TemporalTransportCodec.parseLongTimestampWithTimeZone(rs.getString(idx))),
-                    TemporalTransportCodec.longTimestampWithTimeZoneTransportWriteFunction(timestampWithTimeZoneType),
+                    ObjectReadFunction.of(LongTimestampWithTimeZone.class, (rs, idx) -> TimestampWithTimeZoneTransport.parseLongTimestampWithTimeZone(rs.getString(idx))),
+                    TimestampWithTimeZoneTransport.longPredicateWriteFunction(timestampWithTimeZoneType),
                     predicatePushdownController);
         }
         if (logicalType instanceof TimeWithTimeZoneType timeWithTimeZoneType) {
@@ -292,6 +249,29 @@ final class TrinoReadMappingFactory
                     predicatePushdownController);
         }
         throw new TrinoException(NOT_SUPPORTED, "Unsupported VARCHAR transport type: " + logicalType);
+    }
+
+    private static ColumnMapping dateColumnMapping()
+    {
+        return ColumnMapping.longMapping(
+                DATE,
+                new LongReadFunction()
+                {
+                    @Override
+                    public boolean isNull(ResultSet resultSet, int columnIndex)
+                            throws SQLException
+                    {
+                        return resultSet.getString(columnIndex) == null;
+                    }
+
+                    @Override
+                    public long readLong(ResultSet resultSet, int columnIndex)
+                            throws SQLException
+                    {
+                        return TemporalTransportCodec.parseDate(resultSet.getString(columnIndex)).toEpochDay();
+                    }
+                },
+                dateWriteFunctionUsingLocalDate());
     }
 
     private ColumnMapping jsonTransportColumnMapping(Type logicalType)
@@ -329,7 +309,7 @@ final class TrinoReadMappingFactory
                         byte[] bytes = rs.getBytes(idx);
                         return bytes == null ? null : Slices.wrappedBuffer(bytes);
                     },
-                    (stmt, idx, value) -> {
+                    (_, _, _) -> {
                         throw unsupportedWriteException();
                     },
                     DISABLE_PUSHDOWN);
@@ -356,10 +336,12 @@ final class TrinoReadMappingFactory
         if (!TrinoTypeClassifier.supportsComplexReadType(arrayType.getElementType())) {
             return fallbackToVarchar(session, typeHandle);
         }
+        // DISABLE_PUSHDOWN makes the write function unreachable (tuple domain binding
+        // is the only path into a column mapping write function)
         return Optional.of(ColumnMapping.objectMapping(
                 arrayType,
                 ObjectReadFunction.of(Block.class, (rs, idx) -> JdbcComplexValueCodec.readArray(rs, idx, arrayType.getElementType())),
-                ObjectWriteFunction.of(Block.class, (stmt, idx, block) -> stmt.setObject(idx, JdbcComplexValueCodec.toJdbcValue(block, arrayType))),
+                rejectingWriteFunction(Block.class),
                 DISABLE_PUSHDOWN));
     }
 
@@ -390,7 +372,7 @@ final class TrinoReadMappingFactory
         return Optional.of(ColumnMapping.objectMapping(
                 mapType,
                 ObjectReadFunction.of(SqlMap.class, (rs, idx) -> JdbcComplexValueCodec.readMap(rs, idx, mapType)),
-                ObjectWriteFunction.of(SqlMap.class, (stmt, idx, sqlMap) -> stmt.setObject(idx, JdbcComplexValueCodec.toJdbcValue(sqlMap, mapType))),
+                rejectingWriteFunction(SqlMap.class),
                 DISABLE_PUSHDOWN));
     }
 
@@ -406,7 +388,7 @@ final class TrinoReadMappingFactory
         return Optional.of(ColumnMapping.objectMapping(
                 rowType,
                 ObjectReadFunction.of(SqlRow.class, (rs, idx) -> JdbcComplexValueCodec.readRow(rs, idx, rowType)),
-                ObjectWriteFunction.of(SqlRow.class, (stmt, idx, sqlRow) -> stmt.setObject(idx, JdbcComplexValueCodec.toJdbcValue(sqlRow, rowType))),
+                rejectingWriteFunction(SqlRow.class),
                 DISABLE_PUSHDOWN));
     }
 
@@ -416,6 +398,10 @@ final class TrinoReadMappingFactory
             case "uuid" -> Optional.of(ColumnMapping.sliceMapping(
                     UuidType.UUID,
                     (rs, idx) -> TrinoSpecialTypeCodec.uuidSlice(rs.getString(idx)),
+                    // Pushdown stays disabled because the Trino JDBC driver's untyped
+                    // setObject rejects java.util.UUID, so this write function fails at
+                    // bind time; enabling pushdown needs a typed bind expression
+                    // (CAST(? AS uuid) over a string parameter) first
                     (stmt, idx, value) -> stmt.setObject(idx, UuidType.trinoUuidToJavaUuid(value)),
                     DISABLE_PUSHDOWN));
             case "json" -> {
@@ -431,7 +417,7 @@ final class TrinoReadMappingFactory
                 yield Optional.of(ColumnMapping.sliceMapping(
                         ipAddressType,
                         (rs, idx) -> TrinoSpecialTypeCodec.ipAddressSlice(rs.getString(idx)),
-                        (stmt, idx, value) -> {
+                        (_, _, _) -> {
                             throw unsupportedWriteException();
                         },
                         DISABLE_PUSHDOWN));
@@ -450,7 +436,7 @@ final class TrinoReadMappingFactory
 
     private static <T> ObjectWriteFunction rejectingWriteFunction(Class<T> javaType)
     {
-        return ObjectWriteFunction.of(javaType, (statement, index, value) -> {
+        return ObjectWriteFunction.of(javaType, (_, _, _) -> {
             throw unsupportedWriteException();
         });
     }

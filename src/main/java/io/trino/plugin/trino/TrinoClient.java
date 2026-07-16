@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.trino;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.inject.Inject;
 import io.airlift.log.Logger;
 import io.trino.plugin.base.aggregation.AggregateFunctionRewriter;
@@ -28,10 +29,11 @@ import io.trino.plugin.jdbc.JdbcColumnHandle;
 import io.trino.plugin.jdbc.JdbcExpression;
 import io.trino.plugin.jdbc.JdbcJoinCondition;
 import io.trino.plugin.jdbc.JdbcJoinPushdownUtil;
+import io.trino.plugin.jdbc.JdbcNamedRelationHandle;
 import io.trino.plugin.jdbc.JdbcOutputTableHandle;
-import io.trino.plugin.jdbc.JdbcQueryRelationHandle;
 import io.trino.plugin.jdbc.JdbcSortItem;
 import io.trino.plugin.jdbc.JdbcSplit;
+import io.trino.plugin.jdbc.JdbcStatisticsConfig;
 import io.trino.plugin.jdbc.JdbcTableHandle;
 import io.trino.plugin.jdbc.JdbcTypeHandle;
 import io.trino.plugin.jdbc.PreparedQuery;
@@ -66,50 +68,32 @@ import io.trino.spi.expression.StandardFunctions;
 import io.trino.spi.statistics.ColumnStatistics;
 import io.trino.spi.statistics.Estimate;
 import io.trino.spi.statistics.TableStatistics;
-import io.trino.spi.type.CharType;
-import io.trino.spi.type.DateType;
 import io.trino.spi.type.DecimalType;
-import io.trino.spi.type.NumberType;
-import io.trino.spi.type.TimeType;
-import io.trino.spi.type.TimeWithTimeZoneType;
-import io.trino.spi.type.TimestampType;
 import io.trino.spi.type.TimestampWithTimeZoneType;
 import io.trino.spi.type.Type;
 import io.trino.spi.type.TypeManager;
-import io.trino.spi.type.VarbinaryType;
-import io.trino.spi.type.VarcharType;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static io.trino.matching.Pattern.typeOf;
-import static io.trino.plugin.jdbc.StandardColumnMappings.longDecimalWriteFunction;
-import static io.trino.plugin.jdbc.StandardColumnMappings.shortDecimalWriteFunction;
-import static io.trino.plugin.trino.TrinoDelegationAnalyzer.Decision.REMOTE_DELEGATE;
-import static io.trino.plugin.trino.TrinoDelegationAnalyzer.Decision.UNSUPPORTED;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
-import static io.trino.spi.type.BigintType.BIGINT;
-import static io.trino.spi.type.BooleanType.BOOLEAN;
-import static io.trino.spi.type.DoubleType.DOUBLE;
-import static io.trino.spi.type.IntegerType.INTEGER;
-import static io.trino.spi.type.RealType.REAL;
-import static io.trino.spi.type.SmallintType.SMALLINT;
-import static io.trino.spi.type.TinyintType.TINYINT;
 import static java.lang.String.format;
 
 /**
@@ -123,6 +107,8 @@ public class TrinoClient
 {
     private static final Logger log = Logger.get(TrinoClient.class);
 
+    private static final Duration CAPABILITIES_LOAD_BACKOFF = Duration.ofSeconds(10);
+
     private static final JdbcTypeHandle BIGINT_TYPE_HANDLE = new JdbcTypeHandle(
             Types.BIGINT, Optional.of("bigint"), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty());
     private static final JdbcTypeHandle VARCHAR_TYPE_HANDLE = new JdbcTypeHandle(
@@ -134,16 +120,17 @@ public class TrinoClient
     private final AggregateFunctionRewriter<JdbcExpression, ParameterizedExpression> aggregateFunctionRewriter;
     private final JsonTransportHelper jsonTransportHelper;
     private final TrinoReadMappingFactory readMappingFactory;
-    private final PassthroughCatalogEnforcer passthroughCatalogEnforcer;
     private final PassthroughQueryMetadataHelper passthroughQueryMetadataHelper;
     private final TrinoDelegationAnalyzer delegationAnalyzer;
-    private final String remoteCatalog;
+    private final boolean statisticsEnabled;
     private final AtomicReference<TrinoRemoteCapabilities> remoteCapabilities = new AtomicReference<>();
+    private final FailureBackoff capabilitiesLoadBackoff = new FailureBackoff(CAPABILITIES_LOAD_BACKOFF);
     private final AtomicBoolean remoteVersionLogged = new AtomicBoolean();
 
     @Inject
     public TrinoClient(
             BaseJdbcConfig config,
+            JdbcStatisticsConfig statisticsConfig,
             ConnectionFactory connectionFactory,
             QueryBuilder queryBuilder,
             TypeManager typeManager,
@@ -151,28 +138,33 @@ public class TrinoClient
             RemoteQueryModifier remoteQueryModifier)
     {
         super("\"", connectionFactory, queryBuilder, config.getJdbcTypesMappedToVarchar(), identifierMapping, remoteQueryModifier, true);
-        this.remoteCatalog = extractRemoteCatalog(config.getConnectionUrl());
+        this.statisticsEnabled = statisticsConfig.isEnabled();
         this.jsonTransportHelper = new JsonTransportHelper(this::quoted);
         this.readMappingFactory = new TrinoReadMappingFactory(typeManager, typeHandle -> mapToUnboundedVarchar(typeHandle));
-        this.passthroughCatalogEnforcer = new PassthroughCatalogEnforcer(remoteCatalog);
         this.passthroughQueryMetadataHelper = new PassthroughQueryMetadataHelper(typeManager, this::toColumnMapping);
         TrinoCompatibilityRegistry compatibilityRegistry = new TrinoCompatibilityRegistry();
         this.delegationAnalyzer = new TrinoDelegationAnalyzer(new TrinoRemoteSqlRenderer(this::quoted, compatibilityRegistry));
 
-        // Keep the JDBC expression rewriter as the conservative fallback for OFF/AUTO modes.
+        // Two expression layers coexist by design: the renderer
+        // (TrinoRemoteSqlRenderer, behind TrinoDelegationAnalyzer) is the
+        // Trino-native extension path for delegating compatible expressions, while
+        // the standard JDBC rewriter below is the baseline — it defines the
+        // semantics when delegation is disabled (remote-delegation.enabled=false)
+        // and backs the aggregate function rewriter, so it cannot be removed.
         this.connectorExpressionRewriter = createConnectorExpressionRewriter(this::quoted);
 
-        // Trino supports all standard aggregate functions natively, so pushdown is safe.
+        // Register only aggregate implementations whose semantics match remote Trino.
         this.aggregateFunctionRewriter = new AggregateFunctionRewriter<>(
                 connectorExpressionRewriter,
-                Set.<AggregateFunctionRule<JdbcExpression, ParameterizedExpression>>of(
-                        new ImplementCountAll(BIGINT_TYPE_HANDLE),
-                        new ImplementCount(BIGINT_TYPE_HANDLE),
-                        new ImplementCountDistinct(BIGINT_TYPE_HANDLE, true),
-                        new ImplementMinMax(false), // Trino has no collation differences
-                        new ImplementSum(TrinoClient::decimalTypeHandle),
-                        new ImplementAvgFloatingPoint(),
-                        new ImplementAvgDecimal()));
+                ImmutableSet.<AggregateFunctionRule<JdbcExpression, ParameterizedExpression>>builder()
+                        .add(new ImplementCountAll(BIGINT_TYPE_HANDLE))
+                        .add(new ImplementCount(BIGINT_TYPE_HANDLE))
+                        .add(new ImplementCountDistinct(BIGINT_TYPE_HANDLE, true))
+                        .add(new ImplementMinMax(true)) // both sides share Trino ordering semantics
+                        .add(new ImplementSum(TrinoClient::decimalTypeHandle))
+                        .add(new ImplementAvgFloatingPoint())
+                        .add(new ImplementAvgDecimal())
+                        .build());
     }
 
     static ConnectorExpressionRewriter<ParameterizedExpression> createConnectorExpressionRewriter(Function<String, String> identifierQuote)
@@ -189,7 +181,7 @@ public class TrinoClient
     {
         return Optional.of(new JdbcTypeHandle(
                 Types.DECIMAL,
-                Optional.of("decimal"),
+                Optional.of(decimalType.getDisplayName()),
                 Optional.of(decimalType.getPrecision()),
                 Optional.of(decimalType.getScale()),
                 Optional.empty(),
@@ -241,9 +233,8 @@ public class TrinoClient
     // -------------------------------------------------------------------------
     // Pushdown support: LIMIT, TopN, Aggregation, Join
     //
-    // Both sides are Trino with identical SQL syntax, so all standard
-    // pushdown operations below are safe. This significantly reduces data transfer
-    // through the JDBC bottleneck.
+    // Both sides are Trino with identical SQL syntax, so the supported pushdown
+    // operations below can significantly reduce data transfer through JDBC.
     // -------------------------------------------------------------------------
 
     @Override
@@ -273,40 +264,23 @@ public class TrinoClient
     @Override
     public boolean isTopNGuaranteed(ConnectorSession session)
     {
-        return true;
-    }
-
-    @Override
-    public boolean supportsAggregationPushdown(
-            ConnectorSession session,
-            JdbcTableHandle handle,
-            List<AggregateFunction> aggregates,
-            Map<String, ColumnHandle> assignments,
-            List<List<ColumnHandle>> groupingSets)
-    {
-        return aggregates.stream().noneMatch(TrinoClient::isTextualMinMax);
+        // A transport projection can wrap the remote TopN in an outer query whose
+        // ordering is not guaranteed by SQL, so retain the local TopN operation.
+        return false;
     }
 
     @Override
     public Optional<JdbcExpression> implementAggregation(ConnectorSession session, AggregateFunction aggregate, Map<String, ColumnHandle> assignments)
     {
-        TrinoDelegationAnalyzer.ProjectionAnalysis analysis = delegationAnalyzer.analyzeAggregation(session, aggregate, assignments, getRemoteCapabilities(session));
-        if (analysis.decision() == REMOTE_DELEGATE) {
-            return analysis.expression();
-        }
-        throwIfUnsupported(analysis);
-        return aggregateFunctionRewriter.rewrite(session, aggregate, assignments);
+        return delegationAnalyzer.analyzeAggregation(session, aggregate, assignments, getRemoteCapabilities(session))
+                .or(() -> aggregateFunctionRewriter.rewrite(session, aggregate, assignments));
     }
 
     @Override
     public Optional<ParameterizedExpression> convertPredicate(ConnectorSession session, ConnectorExpression expression, Map<String, ColumnHandle> assignments)
     {
-        TrinoDelegationAnalyzer.ExpressionAnalysis analysis = delegationAnalyzer.analyzePredicate(session, expression, assignments, getRemoteCapabilities(session));
-        if (analysis.decision() == REMOTE_DELEGATE) {
-            return analysis.expression();
-        }
-        throwIfUnsupported(analysis);
-        return connectorExpressionRewriter.rewrite(session, expression, assignments);
+        return delegationAnalyzer.analyzePredicate(session, expression, assignments, getRemoteCapabilities(session))
+                .or(() -> connectorExpressionRewriter.rewrite(session, expression, assignments));
     }
 
     @Override
@@ -315,27 +289,23 @@ public class TrinoClient
         if (!handle.getUpdateAssignments().isEmpty() || assignments.values().stream().anyMatch(TrinoClient::isHiddenJdbcColumn)) {
             return Optional.empty();
         }
-        TrinoDelegationAnalyzer.ProjectionAnalysis analysis = delegationAnalyzer.analyzeProjection(session, expression, assignments, getRemoteCapabilities(session));
-        if (analysis.decision() == REMOTE_DELEGATE) {
-            return analysis.expression();
-        }
-        throwIfUnsupported(analysis);
-        return Optional.empty();
+        return delegationAnalyzer.analyzeProjection(session, expression, assignments, getRemoteCapabilities(session));
     }
 
     @Override
     protected boolean isSupportedJoinCondition(ConnectorSession session, JdbcJoinCondition joinCondition)
     {
-        // Both sides are Trino, so these comparison operators are SQL-compatible
-        // when the planner presents them as connector join conditions.
+        // This only declares operator support for the base JDBC join implementation.
+        // Planner-side coercions and rendered join conditions determine whether any
+        // compatibility-sensitive casts are present.
         return switch (joinCondition.getOperator()) {
             case EQUAL,
-                    NOT_EQUAL,
-                    LESS_THAN,
-                    LESS_THAN_OR_EQUAL,
-                    GREATER_THAN,
-                    GREATER_THAN_OR_EQUAL,
-                    IDENTICAL -> true;
+                 NOT_EQUAL,
+                 LESS_THAN,
+                 LESS_THAN_OR_EQUAL,
+                 GREATER_THAN,
+                 GREATER_THAN_OR_EQUAL,
+                 IDENTICAL -> true;
         };
     }
 
@@ -356,7 +326,7 @@ public class TrinoClient
             Map<JdbcColumnHandle, String> rightAssignments,
             JoinStatistics statistics)
     {
-        Optional<PreparedQuery> preparedQuery = JdbcJoinPushdownUtil.implementJoinCostAware(
+        return JdbcJoinPushdownUtil.implementJoinCostAware(
                 session,
                 joinType,
                 leftSource,
@@ -371,7 +341,6 @@ public class TrinoClient
                         leftAssignments,
                         rightAssignments,
                         statistics));
-        return preparedQuery.map(query -> markDelegatedQuery(session, query));
     }
 
     @Override
@@ -385,7 +354,7 @@ public class TrinoClient
             List<ParameterizedExpression> joinConditions,
             JoinStatistics statistics)
     {
-        Optional<PreparedQuery> preparedQuery = JdbcJoinPushdownUtil.implementJoinCostAware(
+        return JdbcJoinPushdownUtil.implementJoinCostAware(
                 session,
                 joinType,
                 leftSource,
@@ -400,7 +369,6 @@ public class TrinoClient
                         rightProjections,
                         joinConditions,
                         statistics));
-        return preparedQuery.map(query -> markDelegatedQuery(session, query));
     }
 
     @Override
@@ -414,58 +382,59 @@ public class TrinoClient
             Optional<JdbcSplit> split)
     {
         PreparedQuery preparedQuery = super.prepareQuery(session, connection, table, groupingSets, columns, columnExpressions, split);
-        PreparedQuery projectedQuery = applyTransportProjection(preparedQuery, columns);
-        if (isExplicitPassthroughQuery(table, projectedQuery)) {
-            return projectedQuery;
-        }
-        if (!isDelegatedQuery(table, groupingSets, columnExpressions)) {
-            return projectedQuery;
-        }
-        return markDelegatedQuery(session, projectedQuery);
+        // The transport projection must be applied exactly once, at scan time (split present).
+        // Planning-time invocations (join source synthesis) pass no split; wrapping there too
+        // would re-wrap the already-cast columns when the joined query is scanned.
+        return split.isPresent() ? applyTransportProjection(preparedQuery, columns) : preparedQuery;
     }
 
     @Override
     public JdbcTableHandle getTableHandle(ConnectorSession session, PreparedQuery preparedQuery)
     {
-        passthroughCatalogEnforcer.validate(stripTrailingSemicolon(preparedQuery.query()));
+        PreparedQuery normalizedQuery = normalizePassthroughQuery(preparedQuery);
+        PassthroughQueryValidator.validate(normalizedQuery.query());
         try (Connection connection = getConnection(session)) {
-            List<PassthroughQueryMetadataHelper.DescribedOutputColumn> outputColumns = passthroughQueryMetadataHelper.describeOutputColumns(connection, preparedQuery);
-            PreparedQuery addressableQuery = passthroughQueryMetadataHelper.withOutputAliases(preparedQuery, outputColumns);
+            List<PassthroughQueryMetadataHelper.DescribedOutputColumn> outputColumns = passthroughQueryMetadataHelper.describeOutputColumns(connection, normalizedQuery);
+            PreparedQuery addressableQuery = passthroughQueryMetadataHelper.withOutputAliases(normalizedQuery, outputColumns);
             JdbcTableHandle tableHandle;
             try {
                 tableHandle = super.getTableHandle(session, addressableQuery);
             }
-            catch (TrinoException | UnsupportedOperationException e) {
+            catch (TrinoException | UnsupportedOperationException metadataFailure) {
                 // BaseJdbcClient.getTableHandle may throw TrinoException for passthrough
                 // queries that use types or syntax not representable by standard JDBC metadata.
                 // Some paths surface as UnsupportedOperationException from BaseJdbcClient.
                 // Fall back to building the table handle from DESCRIBE OUTPUT metadata.
-                return passthroughQueryMetadataHelper.buildPassthroughTableHandle(session, connection, addressableQuery, outputColumns);
+                return executeFallback(
+                        metadataFailure,
+                        () -> passthroughQueryMetadataHelper.buildPassthroughTableHandle(session, connection, addressableQuery, outputColumns));
             }
             return passthroughQueryMetadataHelper.rewriteColumns(session, connection, tableHandle, outputColumns);
         }
-        catch (SQLException | TrinoException e) {
-            return super.getTableHandle(session, preparedQuery);
+        catch (SQLException e) {
+            // DESCRIBE OUTPUT-based metadata is unavailable for this query; retry the
+            // plain JDBC metadata path, keeping this failure attached if the retry
+            // also fails. Connector-internal failures (TrinoException) propagate.
+            return executeFallback(e, () -> super.getTableHandle(session, normalizedQuery));
         }
     }
 
     @Override
     public TableStatistics getTableStatistics(ConnectorSession session, JdbcTableHandle handle)
     {
-        if (!handle.isNamedRelation()) {
+        if (!statisticsEnabled || !handle.isNamedRelation()) {
             return TableStatistics.builder().build();
         }
 
-        List<JdbcColumnHandle> columns = handle.getColumns().orElse(List.of());
-        if (columns.isEmpty()) {
-            return TableStatistics.builder().build();
-        }
-
-        String statsQuery = "SHOW STATS FOR " + quoted(handle.getRequiredNamedRelation().getRemoteTableName());
-        try (Connection connection = getConnection(session)) {
-            logRemoteVersionOnce(connection);
-            try (PreparedStatement statement = connection.prepareStatement(statsQuery);
+        JdbcNamedRelationHandle relation = handle.getRequiredNamedRelation();
+        String statsQuery = "SHOW STATS FOR " + quoted(relation.getRemoteTableName());
+        try {
+            List<JdbcColumnHandle> columns = handle.getColumns()
+                    .orElseGet(() -> getColumns(session, relation.getSchemaTableName(), relation.getRemoteTableName()));
+            try (Connection connection = getConnection(session);
+                    PreparedStatement statement = connection.prepareStatement(statsQuery);
                     ResultSet resultSet = statement.executeQuery()) {
+                logRemoteVersionOnce(connection);
                 TableStatistics.Builder tableStatistics = TableStatistics.builder();
                 while (resultSet.next()) {
                     String columnName = resultSet.getString("column_name");
@@ -517,70 +486,8 @@ public class TrinoClient
     {
         // JDBC query builders use write mappings for SELECT predicate parameter binding.
         // Keep those mappings available while blocking data-changing operations separately.
-        if (type == BOOLEAN) {
-            return WriteMapping.booleanMapping("boolean", (statement, index, value) -> statement.setBoolean(index, value));
-        }
-        if (type == TINYINT) {
-            return WriteMapping.longMapping("tinyint", (statement, index, value) -> statement.setByte(index, (byte) value));
-        }
-        if (type == SMALLINT) {
-            return WriteMapping.longMapping("smallint", (statement, index, value) -> statement.setShort(index, (short) value));
-        }
-        if (type == INTEGER) {
-            return WriteMapping.longMapping("integer", (statement, index, value) -> statement.setInt(index, (int) value));
-        }
-        if (type == BIGINT) {
-            return WriteMapping.longMapping("bigint", (statement, index, value) -> statement.setLong(index, value));
-        }
-        if (type == REAL) {
-            return WriteMapping.longMapping("real", (statement, index, value) -> statement.setFloat(index, Float.intBitsToFloat((int) value)));
-        }
-        if (type == DOUBLE) {
-            return WriteMapping.doubleMapping("double", (statement, index, value) -> statement.setDouble(index, value));
-        }
-        if (type instanceof DecimalType decimalType) {
-            String dataType = "decimal(" + decimalType.getPrecision() + "," + decimalType.getScale() + ")";
-            if (decimalType.isShort()) {
-                return WriteMapping.longMapping(dataType, shortDecimalWriteFunction(decimalType));
-            }
-            return WriteMapping.objectMapping(dataType, longDecimalWriteFunction(decimalType));
-        }
-        if (type instanceof NumberType) {
-            return TrinoNumberCodec.numberWriteMapping();
-        }
-        if (type instanceof CharType || type instanceof VarcharType) {
-            return WriteMapping.sliceMapping("varchar", (statement, index, value) -> statement.setString(index, value.toStringUtf8()));
-        }
-        if (type instanceof VarbinaryType) {
-            return WriteMapping.sliceMapping("varbinary", (statement, index, value) -> statement.setBytes(index, value.getBytes()));
-        }
-        if (type instanceof DateType) {
-            return WriteMapping.longMapping("date", io.trino.plugin.jdbc.StandardColumnMappings.dateWriteFunctionUsingLocalDate());
-        }
-        if (type instanceof TimeType timeType) {
-            return WriteMapping.longMapping("time(" + timeType.getPrecision() + ")", io.trino.plugin.jdbc.StandardColumnMappings.timeWriteFunction(timeType.getPrecision()));
-        }
-        if (type instanceof TimestampType timestampType) {
-            if (timestampType.isShort()) {
-                return WriteMapping.longMapping("timestamp(" + timestampType.getPrecision() + ")", io.trino.plugin.jdbc.StandardColumnMappings.timestampWriteFunction(timestampType));
-            }
-            if (timestampType.getPrecision() <= 9) {
-                return WriteMapping.objectMapping(
-                        "timestamp(" + timestampType.getPrecision() + ")",
-                        io.trino.plugin.jdbc.StandardColumnMappings.longTimestampWriteFunction(timestampType, timestampType.getPrecision()));
-            }
-            return TemporalTransportCodec.timestampWriteMapping(timestampType);
-        }
-        if (type instanceof TimestampWithTimeZoneType timestampWithTimeZoneType) {
-            return TemporalTransportCodec.timestampWithTimeZoneWriteMapping(timestampWithTimeZoneType);
-        }
-        if (type instanceof TimeWithTimeZoneType timeWithTimeZoneType) {
-            return TemporalTransportCodec.timeWithTimeZoneWriteMapping(timeWithTimeZoneType);
-        }
-        if (TrinoTypeClassifier.isIntervalYearToMonthType(type) || TrinoTypeClassifier.isIntervalDayToSecondType(type)) {
-            return TemporalTransportCodec.intervalWriteMapping(type);
-        }
-        throw new TrinoException(NOT_SUPPORTED, "Unsupported parameter type for pushdown: " + type);
+        return TrinoParameterBindingFactory.createWriteMapping(type)
+                .orElseThrow(() -> new TrinoException(NOT_SUPPORTED, "Unsupported parameter type for pushdown: " + type));
     }
 
     @Override
@@ -623,6 +530,12 @@ public class TrinoClient
     public void setColumnType(ConnectorSession session, JdbcTableHandle handle, JdbcColumnHandle column, Type type)
     {
         throw new TrinoException(NOT_SUPPORTED, "This connector does not support setting column types");
+    }
+
+    @Override
+    public void dropNotNullConstraint(ConnectorSession session, JdbcTableHandle handle, JdbcColumnHandle column)
+    {
+        throw new TrinoException(NOT_SUPPORTED, "This connector does not support dropping NOT NULL constraints");
     }
 
     @Override
@@ -707,7 +620,9 @@ public class TrinoClient
             String alias = quoted(column.getColumnName());
             selectItems.add(switch (transportKind) {
                 case NATIVE -> reference + " AS " + alias;
-                case VARCHAR_CAST -> "CAST(" + reference + " AS VARCHAR) AS " + alias;
+                case VARCHAR_CAST -> (logicalType instanceof TimestampWithTimeZoneType
+                        ? TimestampWithTimeZoneTransport.readExpression(reference)
+                        : "CAST(" + reference + " AS VARCHAR)") + " AS " + alias;
                 case VARBINARY_CAST -> "CAST(" + reference + " AS VARBINARY) AS " + alias;
                 case JSON_CAST -> "json_format(CAST(" + jsonTransportHelper.buildJsonTransportExpression(reference, logicalType) + " AS JSON)) AS " + alias;
             });
@@ -717,24 +632,14 @@ public class TrinoClient
                 "SELECT " + String.join(", ", selectItems) + " FROM (" + sql + ") " + relationAlias);
     }
 
-    private PreparedQuery markDelegatedQuery(ConnectorSession session, PreparedQuery preparedQuery)
-    {
-        if (!TrinoRemoteDelegationSessionProperties.isRemoteDelegationEnabled(session) ||
-                TrinoRemoteDelegationSessionProperties.getRemoteDelegationMode(session) == TrinoRemoteDelegationMode.OFF) {
-            return preparedQuery;
-        }
-        String marker = remoteDelegationMarker();
-        if (preparedQuery.query().stripLeading().startsWith("/* " + marker + " */")) {
-            return preparedQuery;
-        }
-        return preparedQuery.transformQuery(sql -> "/* " + marker + " */ " + sql);
-    }
-
     private TrinoRemoteCapabilities getRemoteCapabilities(ConnectorSession session)
     {
         TrinoRemoteCapabilities cached = remoteCapabilities.get();
         if (cached != null) {
             return cached;
+        }
+        if (!capabilitiesLoadBackoff.shouldAttempt()) {
+            return TrinoRemoteCapabilities.unavailable();
         }
 
         TrinoRemoteCapabilities loaded;
@@ -747,43 +652,17 @@ public class TrinoClient
             });
         }
         catch (SQLException | RuntimeException e) {
+            // Transient failures must not be cached: only suppress reload attempts
+            // briefly, so a remote outage does not disable delegation until restart
+            capabilitiesLoadBackoff.recordFailure();
             log.warn(e, "Unable to determine remote Trino capabilities; Trino-native delegation will fall back to local execution where possible");
-            loaded = TrinoRemoteCapabilities.unavailable();
+            return TrinoRemoteCapabilities.unavailable();
         }
 
         if (remoteCapabilities.compareAndSet(null, loaded)) {
             return loaded;
         }
         return remoteCapabilities.get();
-    }
-
-    private boolean isExplicitPassthroughQuery(JdbcTableHandle table, PreparedQuery preparedQuery)
-    {
-        return table.getRelationHandle() instanceof JdbcQueryRelationHandle &&
-                !preparedQuery.query().contains(remoteDelegationMarker());
-    }
-
-    private static boolean isDelegatedQuery(
-            JdbcTableHandle table,
-            Optional<List<List<JdbcColumnHandle>>> groupingSets,
-            Map<String, ParameterizedExpression> columnExpressions)
-    {
-        return table.getRelationHandle() instanceof JdbcQueryRelationHandle ||
-                !table.getConstraintExpressions().isEmpty() ||
-                groupingSets.isPresent() ||
-                !columnExpressions.isEmpty() ||
-                table.getLimit().isPresent() ||
-                table.getSortOrder().isPresent();
-    }
-
-    private String remoteDelegationMarker()
-    {
-        return "RemoteTrinoQuery[catalog=" + remoteCatalog + ", delegated=true]";
-    }
-
-    private static String extractRemoteCatalog(String connectionUrl)
-    {
-        return TrinoConnectionUrl.extractRemoteCatalog(connectionUrl);
     }
 
     private static Estimate toEstimate(Double value)
@@ -808,34 +687,9 @@ public class TrinoClient
                 .findFirst();
     }
 
-    private static boolean isTextualMinMax(AggregateFunction aggregate)
-    {
-        String functionName = aggregate.getFunctionName();
-        if (!functionName.equals("min") && !functionName.equals("max")) {
-            return false;
-        }
-        return aggregate.getArguments().stream()
-                .map(ConnectorExpression::getType)
-                .anyMatch(type -> type instanceof VarcharType || type instanceof CharType);
-    }
-
     private static boolean isHiddenJdbcColumn(ColumnHandle columnHandle)
     {
         return columnHandle instanceof JdbcColumnHandle jdbcColumnHandle && jdbcColumnHandle.getColumnName().startsWith("$");
-    }
-
-    private static void throwIfUnsupported(TrinoDelegationAnalyzer.ExpressionAnalysis analysis)
-    {
-        if (analysis.decision() == UNSUPPORTED) {
-            throw new TrinoException(NOT_SUPPORTED, analysis.reason().orElse("Remote Trino delegation is not supported for this expression"));
-        }
-    }
-
-    private static void throwIfUnsupported(TrinoDelegationAnalyzer.ProjectionAnalysis analysis)
-    {
-        if (analysis.decision() == UNSUPPORTED) {
-            throw new TrinoException(NOT_SUPPORTED, analysis.reason().orElse("Remote Trino delegation is not supported for this expression"));
-        }
     }
 
     static String stripTrailingSemicolon(String sql)
@@ -845,5 +699,23 @@ public class TrinoClient
             return trimmed.substring(0, trimmed.length() - 1);
         }
         return trimmed;
+    }
+
+    static PreparedQuery normalizePassthroughQuery(PreparedQuery preparedQuery)
+    {
+        return preparedQuery.transformQuery(TrinoClient::stripTrailingSemicolon);
+    }
+
+    static <T> T executeFallback(Throwable primaryFailure, Supplier<T> fallback)
+    {
+        try {
+            return fallback.get();
+        }
+        catch (RuntimeException fallbackFailure) {
+            if (fallbackFailure != primaryFailure) {
+                fallbackFailure.addSuppressed(primaryFailure);
+            }
+            throw fallbackFailure;
+        }
     }
 }

@@ -54,6 +54,7 @@ import java.util.Map;
 import static io.trino.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
+import static io.trino.spi.type.Chars.truncateToLengthAndTrimSpaces;
 import static io.trino.spi.type.DoubleType.DOUBLE;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.RealType.REAL;
@@ -121,57 +122,6 @@ final class JdbcComplexValueCodec
         return new SqlRow(0, fieldBlocks);
     }
 
-    static Object toJdbcValue(Object trinoValue, Type type)
-    {
-        if (trinoValue == null) {
-            return null;
-        }
-        if (type instanceof ArrayType arrayType) {
-            Block block = (Block) trinoValue;
-            Type elementType = arrayType.getElementType();
-            List<Object> list = new ArrayList<>(block.getPositionCount());
-            for (int index = 0; index < block.getPositionCount(); index++) {
-                if (block.isNull(index)) {
-                    list.add(null);
-                }
-                else {
-                    list.add(toJdbcValue(readNativeValue(elementType, block, index), elementType));
-                }
-            }
-            return list;
-        }
-        if (type instanceof MapType mapType) {
-            SqlMap sqlMap = (SqlMap) trinoValue;
-            Block rawKeyBlock = sqlMap.getRawKeyBlock();
-            Block rawValueBlock = sqlMap.getRawValueBlock();
-            int offset = sqlMap.getRawOffset();
-            int size = sqlMap.getSize();
-            Map<Object, Object> map = new java.util.LinkedHashMap<>();
-            for (int index = 0; index < size; index++) {
-                Object key = toJdbcValue(readNativeValue(mapType.getKeyType(), rawKeyBlock, offset + index), mapType.getKeyType());
-                Object value = rawValueBlock.isNull(offset + index)
-                        ? null
-                        : toJdbcValue(readNativeValue(mapType.getValueType(), rawValueBlock, offset + index), mapType.getValueType());
-                map.put(key, value);
-            }
-            return map;
-        }
-        if (type instanceof RowType rowType) {
-            SqlRow sqlRow = (SqlRow) trinoValue;
-            int rawIndex = sqlRow.getRawIndex();
-            List<Object> values = new ArrayList<>(rowType.getFields().size());
-            for (int index = 0; index < rowType.getFields().size(); index++) {
-                Block fieldBlock = sqlRow.getRawFieldBlock(index);
-                values.add(fieldBlock.isNull(rawIndex) ? null : toJdbcValue(readNativeValue(rowType.getFields().get(index).getType(), fieldBlock, rawIndex), rowType.getFields().get(index).getType()));
-            }
-            return values;
-        }
-        if (TrinoTypeClassifier.isNumberType(type)) {
-            return TrinoNumberCodec.formatObject(trinoValue);
-        }
-        return trinoValue;
-    }
-
     @SuppressWarnings("unchecked")
     private static void writeJdbcValueToBlock(Object value, Type type, BlockBuilder builder)
     {
@@ -221,7 +171,11 @@ final class JdbcComplexValueCodec
 
     private static void writeScalarJdbcValueToBlock(Object value, Type type, BlockBuilder builder)
     {
-        if (type instanceof VarcharType || type instanceof CharType) {
+        if (type instanceof CharType charType) {
+            type.writeSlice(builder, truncateToLengthAndTrimSpaces(Slices.utf8Slice(value.toString()), charType));
+            return;
+        }
+        if (type instanceof VarcharType) {
             type.writeSlice(builder, Slices.utf8Slice(value.toString()));
             return;
         }
@@ -266,7 +220,7 @@ final class JdbcComplexValueCodec
                 epochDay = localDate.toEpochDay();
             }
             else {
-                epochDay = LocalDate.parse(value.toString()).toEpochDay();
+                epochDay = TemporalTransportCodec.parseDate(value.toString()).toEpochDay();
             }
             type.writeLong(builder, epochDay);
             return;
@@ -364,14 +318,6 @@ final class JdbcComplexValueCodec
                 "Unsupported type %s for JDBC value of class %s",
                 type.getDisplayName(),
                 value.getClass().getName()));
-    }
-
-    private static Object readNativeValue(Type type, Block block, int position)
-    {
-        if (block.isNull(position)) {
-            return null;
-        }
-        return type.getObjectValue(block, position);
     }
 
     private static Object[] toObjectArray(Object value)
