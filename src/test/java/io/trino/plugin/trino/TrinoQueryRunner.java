@@ -630,15 +630,15 @@ public final class TrinoQueryRunner
                 memorySession,
                 "CREATE TABLE test_row_json AS SELECT CAST(ROW('test', JSON '{\"key\":\"val\"}') AS ROW(label VARCHAR, data JSON)) AS x");
 
-        // --- TSTZ precision > 9: unsupported (Java ZonedDateTime caps at nanosecond) ---
+        // --- TSTZ precision > 9: lossless transport fallback because Java ZonedDateTime caps at nanoseconds ---
         remoteRunner.execute(
                 memorySession,
-                "CREATE TABLE test_tstz12 AS SELECT CAST('id1' AS VARCHAR) AS id, CAST(TIMESTAMP '2024-01-15 10:30:45.123456789012 UTC' AS TIMESTAMP(12) WITH TIME ZONE) AS unsupported_col");
+                "CREATE TABLE test_tstz12 AS SELECT CAST('id1' AS VARCHAR) AS id, CAST(TIMESTAMP '2024-01-15 10:30:45.123456789012 UTC' AS TIMESTAMP(12) WITH TIME ZONE) AS transport_col");
 
-        // --- Plain TIMESTAMP precision > 9: unsupported (JDBC caps at nanosecond) ---
+        // --- Plain TIMESTAMP precision > 9: lossless transport fallback because JDBC caps at nanoseconds ---
         remoteRunner.execute(
                 memorySession,
-                "CREATE TABLE test_ts12 AS SELECT CAST('id1' AS VARCHAR) AS id, CAST(TIMESTAMP '2024-01-15 10:30:45.123456789012' AS TIMESTAMP(12)) AS unsupported_col");
+                "CREATE TABLE test_ts12 AS SELECT CAST('id1' AS VARCHAR) AS id, CAST(TIMESTAMP '2024-01-15 10:30:45.123456789012' AS TIMESTAMP(12)) AS transport_col");
 
         // --- Top-level interval transport fallback ---
         remoteRunner.execute(

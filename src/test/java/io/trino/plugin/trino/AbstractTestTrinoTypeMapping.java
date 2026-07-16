@@ -777,10 +777,10 @@ abstract class AbstractTestTrinoTypeMapping
         MaterializedResult result = computeActual("DESCRIBE remote.default.test_tstz12");
         assertThat(result.getRowCount()).isEqualTo(2);
         assertThat(result.getMaterializedRows()).anySatisfy(row -> {
-            assertThat(row.getField(0)).isEqualTo("unsupported_col");
+            assertThat(row.getField(0)).isEqualTo("transport_col");
             assertThat(row.getField(1).toString()).isEqualTo("timestamp(12) with time zone");
         });
-        assertThat(computeActual("SELECT CAST(unsupported_col AS VARCHAR) FROM remote.default.test_tstz12").getOnlyValue())
+        assertThat(computeActual("SELECT CAST(transport_col AS VARCHAR) FROM remote.default.test_tstz12").getOnlyValue())
                 .isEqualTo("2024-01-15 10:30:45.123456789012 UTC");
     }
 
@@ -790,10 +790,10 @@ abstract class AbstractTestTrinoTypeMapping
         MaterializedResult result = computeActual("DESCRIBE remote.default.test_ts12");
         assertThat(result.getRowCount()).isEqualTo(2);
         assertThat(result.getMaterializedRows()).anySatisfy(row -> {
-            assertThat(row.getField(0)).isEqualTo("unsupported_col");
+            assertThat(row.getField(0)).isEqualTo("transport_col");
             assertThat(row.getField(1).toString()).isEqualTo("timestamp(12)");
         });
-        assertThat(computeActual("SELECT CAST(unsupported_col AS VARCHAR) FROM remote.default.test_ts12").getOnlyValue())
+        assertThat(computeActual("SELECT CAST(transport_col AS VARCHAR) FROM remote.default.test_ts12").getOnlyValue())
                 .isEqualTo("2024-01-15 10:30:45.123456789012");
     }
 
