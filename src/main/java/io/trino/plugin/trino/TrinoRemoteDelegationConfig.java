@@ -15,38 +15,21 @@ package io.trino.plugin.trino;
 
 import io.airlift.configuration.Config;
 import io.airlift.configuration.ConfigDescription;
-import io.airlift.configuration.LegacyConfig;
 
 public class TrinoRemoteDelegationConfig
 {
     private boolean enabled = true;
-    private TrinoRemoteDelegationMode mode = TrinoRemoteDelegationMode.AUTO;
 
     public boolean isEnabled()
     {
         return enabled;
     }
 
-    @Config("trino.remote-delegation.enabled")
-    @LegacyConfig("remote-delegation.enabled")
+    @Config("remote-delegation.enabled")
     @ConfigDescription("Enable Trino-native remote SQL delegation")
     public TrinoRemoteDelegationConfig setEnabled(boolean enabled)
     {
         this.enabled = enabled;
-        return this;
-    }
-
-    public TrinoRemoteDelegationMode getMode()
-    {
-        return mode;
-    }
-
-    @Config("trino.remote-delegation.mode")
-    @LegacyConfig("remote-delegation.mode")
-    @ConfigDescription("Remote delegation mode: AUTO, OFF, or STRICT")
-    public TrinoRemoteDelegationConfig setMode(TrinoRemoteDelegationMode mode)
-    {
-        this.mode = mode;
         return this;
     }
 }

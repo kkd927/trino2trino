@@ -13,9 +13,23 @@
  */
 package io.trino.plugin.trino;
 
-public enum TrinoRemoteDelegationMode
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+final class TestTrinoSpecialTypeCodec
 {
-    AUTO,
-    OFF,
-    STRICT,
+    @Test
+    void testIpAddressRejectsHostnames()
+    {
+        assertThatThrownBy(() -> TrinoSpecialTypeCodec.ipAddressSlice("localhost"))
+                .hasMessageContaining("Invalid IP address: localhost");
+    }
+
+    @Test
+    void testIpAddressCanonicalizesIpv4()
+    {
+        assertThat(TrinoSpecialTypeCodec.ipAddressSlice("192.168.1.1").length()).isEqualTo(16);
+    }
 }

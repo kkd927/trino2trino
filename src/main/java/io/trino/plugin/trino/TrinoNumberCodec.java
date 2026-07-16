@@ -102,11 +102,6 @@ final class TrinoNumberCodec
         return value.toBigDecimal().toString();
     }
 
-    static String formatObject(Object value)
-    {
-        return format(toTrinoNumber(value));
-    }
-
     static ObjectWriteFunction numberWriteFunction()
     {
         return new ObjectWriteFunction()

@@ -22,12 +22,9 @@ import io.trino.spi.TrinoException;
 import io.trino.spi.type.DateTimeEncoding;
 import io.trino.spi.type.LongTimeWithTimeZone;
 import io.trino.spi.type.LongTimestamp;
-import io.trino.spi.type.LongTimestampWithTimeZone;
 import io.trino.spi.type.TimeType;
 import io.trino.spi.type.TimeWithTimeZoneType;
-import io.trino.spi.type.TimeZoneKey;
 import io.trino.spi.type.TimestampType;
-import io.trino.spi.type.TimestampWithTimeZoneType;
 import io.trino.spi.type.Type;
 
 import java.sql.PreparedStatement;
@@ -36,9 +33,8 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.time.ZoneId;
 import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
+import java.util.Locale;
 import java.util.function.Function;
 import java.util.function.LongFunction;
 import java.util.regex.Matcher;
@@ -49,15 +45,24 @@ import static java.lang.Math.toIntExact;
 
 final class TemporalTransportCodec
 {
+    private static final Pattern UNSIGNED_EXTENDED_DATE_PATTERN = Pattern.compile("\\d{5,}-\\d{2}-\\d{2}");
     private static final Pattern TIME_WITH_TIME_ZONE_PATTERN = Pattern.compile("(?<time>\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,12})?)\\s*(?<offset>[+-]\\d{2}:\\d{2})");
-    private static final Pattern TIMESTAMP_PATTERN = Pattern.compile("(?<date>-?\\d{4,}-\\d{2}-\\d{2}) (?<time>\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,12})?)");
-    private static final Pattern TIMESTAMP_WITH_TIME_ZONE_PATTERN = Pattern.compile("(?<date>-?\\d{4,}-\\d{2}-\\d{2}) (?<time>\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,12})?) (?<zone>.+)");
+    private static final Pattern TIMESTAMP_PATTERN = Pattern.compile("(?<date>[+-]?\\d{4,}-\\d{2}-\\d{2}) (?<time>\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,12})?)");
     private static final long PICOSECONDS_PER_SECOND = 1_000_000_000_000L;
     private static final long PICOSECONDS_PER_MINUTE = 60 * PICOSECONDS_PER_SECOND;
     private static final long PICOSECONDS_PER_HOUR = 60 * PICOSECONDS_PER_MINUTE;
     private static final long PICOSECONDS_PER_DAY = 24 * PICOSECONDS_PER_HOUR;
 
     private TemporalTransportCodec() {}
+
+    static LocalDate parseDate(String value)
+    {
+        String normalized = value.trim();
+        if (UNSIGNED_EXTENDED_DATE_PATTERN.matcher(normalized).matches()) {
+            normalized = "+" + normalized;
+        }
+        return LocalDate.parse(normalized);
+    }
 
     static long parseTimeToPicos(String value)
     {
@@ -73,18 +78,6 @@ final class TemporalTransportCodec
     {
         ParsedTimestampValue parsedTimestamp = parseTimestampValue(value);
         return new LongTimestamp(parsedTimestamp.epochMicros(), parsedTimestamp.picosOfMicro());
-    }
-
-    static long parseShortTimestampWithTimeZone(String value)
-    {
-        ParsedTimestampWithTimeZoneValue parsedTimestamp = parseTimestampWithTimeZoneValue(value);
-        return DateTimeEncoding.packDateTimeWithZone(parsedTimestamp.epochMillis(), parsedTimestamp.timeZoneKey());
-    }
-
-    static LongTimestampWithTimeZone parseLongTimestampWithTimeZone(String value)
-    {
-        ParsedTimestampWithTimeZoneValue parsedTimestamp = parseTimestampWithTimeZoneValue(value);
-        return LongTimestampWithTimeZone.fromEpochMillisAndFraction(parsedTimestamp.epochMillis(), parsedTimestamp.picosOfMilli(), parsedTimestamp.timeZoneKey());
     }
 
     static long parseShortTimeWithTimeZone(String value)
@@ -114,15 +107,6 @@ final class TemporalTransportCodec
             return WriteMapping.longMapping(bindType, shortTimestampTransportWriteFunction(type));
         }
         return WriteMapping.objectMapping(bindType, longTimestampTransportWriteFunction(type));
-    }
-
-    static WriteMapping timestampWithTimeZoneWriteMapping(TimestampWithTimeZoneType type)
-    {
-        String bindType = "timestamp(" + type.getPrecision() + ") with time zone";
-        if (type.isShort()) {
-            return WriteMapping.longMapping(bindType, shortTimestampWithTimeZoneTransportWriteFunction(type));
-        }
-        return WriteMapping.objectMapping(bindType, longTimestampWithTimeZoneTransportWriteFunction(type));
     }
 
     static WriteMapping timeWithTimeZoneWriteMapping(TimeWithTimeZoneType type)
@@ -158,18 +142,6 @@ final class TemporalTransportCodec
         return stringObjectTransportWriteFunction(LongTimestamp.class, bindType, value -> formatLongTimestampValue(value, type));
     }
 
-    static LongWriteFunction shortTimestampWithTimeZoneTransportWriteFunction(TimestampWithTimeZoneType type)
-    {
-        String bindType = "timestamp(" + type.getPrecision() + ") with time zone";
-        return stringLongTransportWriteFunction(bindType, value -> formatShortTimestampWithTimeZoneValue(value, type));
-    }
-
-    static ObjectWriteFunction longTimestampWithTimeZoneTransportWriteFunction(TimestampWithTimeZoneType type)
-    {
-        String bindType = "timestamp(" + type.getPrecision() + ") with time zone";
-        return stringObjectTransportWriteFunction(LongTimestampWithTimeZone.class, bindType, value -> formatLongTimestampWithTimeZoneValue(value, type));
-    }
-
     static LongWriteFunction shortTimeWithTimeZoneTransportWriteFunction(TimeWithTimeZoneType type)
     {
         String bindType = "time(" + type.getPrecision() + ") with time zone";
@@ -200,7 +172,7 @@ final class TemporalTransportCodec
                     statement.setInt(index, toIntExact(value));
                     return;
                 }
-                statement.setString(index, value + "ms");
+                statement.setLong(index, value);
             }
         };
     }
@@ -210,7 +182,7 @@ final class TemporalTransportCodec
         if (TrinoTypeClassifier.isIntervalYearToMonthType(type)) {
             return "INTERVAL '1' MONTH * CAST(? AS INTEGER)";
         }
-        return "parse_duration(?)";
+        return "INTERVAL '0.001' SECOND * CAST(? AS BIGINT)";
     }
 
     private static LongWriteFunction stringLongTransportWriteFunction(String bindType, LongFunction<String> formatter)
@@ -281,25 +253,6 @@ final class TemporalTransportCodec
         return formatDateTimeValue(dateTime, picoFraction, precision);
     }
 
-    private static String formatShortTimestampWithTimeZoneValue(long value, TimestampWithTimeZoneType type)
-    {
-        long epochMillis = DateTimeEncoding.unpackMillisUtc(value);
-        TimeZoneKey timeZoneKey = DateTimeEncoding.unpackZoneKey(value);
-        return formatTimestampWithTimeZoneValue(epochMillis, 0, type.getPrecision(), timeZoneKey);
-    }
-
-    private static String formatLongTimestampWithTimeZoneValue(LongTimestampWithTimeZone value, TimestampWithTimeZoneType type)
-    {
-        return formatTimestampWithTimeZoneValue(value.getEpochMillis(), value.getPicosOfMilli(), type.getPrecision(), TimeZoneKey.getTimeZoneKey(value.getTimeZoneKey()));
-    }
-
-    private static String formatTimestampWithTimeZoneValue(long epochMillis, int picosOfMilli, int precision, TimeZoneKey timeZoneKey)
-    {
-        ZonedDateTime zonedDateTime = Instant.ofEpochMilli(epochMillis).atZone(timeZoneKey.getZoneId());
-        long picoFraction = (zonedDateTime.getNano() * 1_000L) + picosOfMilli;
-        return formatDateTimeValue(zonedDateTime.toLocalDateTime(), picoFraction, precision) + " " + timeZoneKey.getId();
-    }
-
     private static String formatShortTimeWithTimeZoneValue(long value, TimeWithTimeZoneType type)
     {
         long picosOfDay = DateTimeEncoding.unpackTimeNanos(value) * 1_000L;
@@ -320,6 +273,7 @@ final class TemporalTransportCodec
     private static String formatDateTimeValue(LocalDateTime dateTime, long picoFraction, int precision)
     {
         String value = String.format(
+                Locale.ROOT,
                 "%s %02d:%02d:%02d",
                 dateTime.toLocalDate(),
                 dateTime.getHour(),
@@ -337,7 +291,7 @@ final class TemporalTransportCodec
         normalized %= PICOSECONDS_PER_MINUTE;
         long seconds = normalized / PICOSECONDS_PER_SECOND;
         long picoFraction = normalized % PICOSECONDS_PER_SECOND;
-        return String.format("%02d:%02d:%02d", hours, minutes, seconds) + formatFraction(picoFraction, precision);
+        return String.format(Locale.ROOT, "%02d:%02d:%02d", hours, minutes, seconds) + formatFraction(picoFraction, precision);
     }
 
     private static String formatFraction(long picoFraction, int precision)
@@ -345,7 +299,7 @@ final class TemporalTransportCodec
         if (precision == 0) {
             return "";
         }
-        return "." + String.format("%012d", picoFraction).substring(0, precision);
+        return "." + String.format(Locale.ROOT, "%012d", picoFraction).substring(0, precision);
     }
 
     private static String formatOffset(int offsetMinutes)
@@ -353,7 +307,7 @@ final class TemporalTransportCodec
         int absOffsetMinutes = Math.abs(offsetMinutes);
         int hours = absOffsetMinutes / 60;
         int minutes = absOffsetMinutes % 60;
-        return String.format("%s%02d:%02d", offsetMinutes >= 0 ? "+" : "-", hours, minutes);
+        return String.format(Locale.ROOT, "%s%02d:%02d", offsetMinutes >= 0 ? "+" : "-", hours, minutes);
     }
 
     private record ParsedClockTime(long picosOfDay, long fractionPicosOfSecond) {}
@@ -361,8 +315,6 @@ final class TemporalTransportCodec
     private record ParsedTimeWithTimeZoneValue(long picosOfDay, int offsetMinutes) {}
 
     private record ParsedTimestampValue(long epochMicros, int picosOfMicro) {}
-
-    private record ParsedTimestampWithTimeZoneValue(long epochMillis, int picosOfMilli, TimeZoneKey timeZoneKey) {}
 
     private static ParsedClockTime parseClockTime(String value)
     {
@@ -396,29 +348,13 @@ final class TemporalTransportCodec
         if (!matcher.matches()) {
             throw new TrinoException(JDBC_ERROR, "Invalid timestamp value: " + value);
         }
-        LocalDate date = LocalDate.parse(matcher.group("date"));
+        LocalDate date = parseDate(matcher.group("date"));
         ParsedClockTime parsedClockTime = parseClockTime(matcher.group("time"));
         LocalDateTime localDateTime = LocalDateTime.of(date, LocalTime.ofNanoOfDay(parsedClockTime.picosOfDay() / 1_000L));
         long epochSecond = localDateTime.toEpochSecond(ZoneOffset.UTC);
         long epochMicros = epochSecond * 1_000_000L + parsedClockTime.fractionPicosOfSecond() / 1_000_000L;
         int picosOfMicro = (int) (parsedClockTime.fractionPicosOfSecond() % 1_000_000L);
         return new ParsedTimestampValue(epochMicros, picosOfMicro);
-    }
-
-    private static ParsedTimestampWithTimeZoneValue parseTimestampWithTimeZoneValue(String value)
-    {
-        Matcher matcher = TIMESTAMP_WITH_TIME_ZONE_PATTERN.matcher(value.trim());
-        if (!matcher.matches()) {
-            throw new TrinoException(JDBC_ERROR, "Invalid timestamp with time zone value: " + value);
-        }
-        LocalDate date = LocalDate.parse(matcher.group("date"));
-        ParsedClockTime parsedClockTime = parseClockTime(matcher.group("time"));
-        ZoneId zoneId = ZoneId.of(matcher.group("zone"));
-        LocalDateTime localDateTime = LocalDateTime.of(date, LocalTime.ofNanoOfDay(parsedClockTime.picosOfDay() / 1_000L));
-        long epochSecond = localDateTime.atZone(zoneId).toEpochSecond();
-        long epochMillis = epochSecond * 1_000L + parsedClockTime.fractionPicosOfSecond() / 1_000_000_000L;
-        int picosOfMilli = (int) (parsedClockTime.fractionPicosOfSecond() % 1_000_000_000L);
-        return new ParsedTimestampWithTimeZoneValue(epochMillis, picosOfMilli, TimeZoneKey.getTimeZoneKey(zoneId.getId()));
     }
 
     private static long parseFractionToPicos(String fraction)

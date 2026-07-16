@@ -86,8 +86,8 @@ final class TrinoTypeClassifier
         if (type instanceof TimestampType timestampType) {
             return timestampType.getPrecision() > 9;
         }
-        if (type instanceof TimestampWithTimeZoneType timestampWithTimeZoneType) {
-            return timestampWithTimeZoneType.getPrecision() > 9;
+        if (type instanceof TimestampWithTimeZoneType) {
+            return true;
         }
         if (type instanceof TimeWithTimeZoneType) {
             return true;
@@ -143,17 +143,17 @@ final class TrinoTypeClassifier
 
     static boolean isJsonType(Type type)
     {
-        return type.getTypeSignature().getBase().equals("json");
+        return type.getBaseName().equals("json");
     }
 
     static boolean isIpAddressType(Type type)
     {
-        return type.getTypeSignature().getBase().equals("ipaddress");
+        return type.getBaseName().equals("ipaddress");
     }
 
     static boolean isNumberType(Type type)
     {
-        return type.getTypeSignature().getBase().equals(NumberType.NAME);
+        return type.getBaseName().equals(NumberType.NAME);
     }
 
     static TransportKind transportKind(Type type)
@@ -172,7 +172,7 @@ final class TrinoTypeClassifier
 
     private static SketchTransportKind sketchTransportKind(Type type)
     {
-        String typeBase = type.getTypeSignature().getBase();
+        String typeBase = type.getBaseName();
         if (typeBase.equalsIgnoreCase("HyperLogLog") ||
                 typeBase.equalsIgnoreCase("P4HyperLogLog") ||
                 typeBase.equalsIgnoreCase("qdigest") ||
@@ -225,11 +225,18 @@ final class TrinoTypeClassifier
 
     private static boolean isNativeComplexLeafType(Type type)
     {
+        // Trino JDBC converts nested dates through java.sql.Date, which changes
+        // proleptic Gregorian dates before the Gregorian cutover and BCE dates.
+        if (type instanceof DateType) {
+            return false;
+        }
         if (isCommonLeafType(type)) {
             return true;
         }
         if (type instanceof TimeType timeType) {
-            return timeType.getPrecision() <= 9;
+            // Trino JDBC exposes nested times as java.sql.Time, which does not
+            // preserve fractional seconds.
+            return timeType.getPrecision() == 0;
         }
         // JDBC ARRAY / MAP / ROW decoding does not preserve timestamp semantics exactly,
         // so timestamps inside complex values must use transport rewriting instead.
