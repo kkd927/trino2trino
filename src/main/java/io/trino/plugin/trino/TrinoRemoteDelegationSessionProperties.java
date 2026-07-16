@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.trino;
 
+import com.google.common.collect.ImmutableList;
 import com.google.inject.Inject;
 import io.trino.plugin.base.session.SessionPropertiesProvider;
 import io.trino.spi.connector.ConnectorSession;
@@ -21,30 +22,22 @@ import io.trino.spi.session.PropertyMetadata;
 import java.util.List;
 
 import static io.trino.spi.session.PropertyMetadata.booleanProperty;
-import static io.trino.spi.session.PropertyMetadata.enumProperty;
 
 public class TrinoRemoteDelegationSessionProperties
         implements SessionPropertiesProvider
 {
     static final String REMOTE_DELEGATION_ENABLED = "remote_delegation_enabled";
-    static final String REMOTE_DELEGATION_MODE = "remote_delegation_mode";
 
     private final List<PropertyMetadata<?>> properties;
 
     @Inject
     TrinoRemoteDelegationSessionProperties(TrinoRemoteDelegationConfig config)
     {
-        properties = List.of(
+        properties = ImmutableList.of(
                 booleanProperty(
                         REMOTE_DELEGATION_ENABLED,
                         "Enable Trino-native remote SQL delegation",
                         config.isEnabled(),
-                        false),
-                enumProperty(
-                        REMOTE_DELEGATION_MODE,
-                        "Remote delegation mode",
-                        TrinoRemoteDelegationMode.class,
-                        config.getMode(),
                         false));
     }
 
@@ -57,10 +50,5 @@ public class TrinoRemoteDelegationSessionProperties
     static boolean isRemoteDelegationEnabled(ConnectorSession session)
     {
         return session.getProperty(REMOTE_DELEGATION_ENABLED, Boolean.class);
-    }
-
-    static TrinoRemoteDelegationMode getRemoteDelegationMode(ConnectorSession session)
-    {
-        return session.getProperty(REMOTE_DELEGATION_MODE, TrinoRemoteDelegationMode.class);
     }
 }

@@ -33,12 +33,14 @@ import io.trino.plugin.jdbc.TypeHandlingJdbcConfig;
 import io.trino.plugin.jdbc.UnsupportedTypeHandling;
 import io.trino.plugin.jdbc.credential.CredentialProvider;
 import io.trino.plugin.jdbc.ptf.Query;
+import io.trino.spi.connector.ConnectorAccessControl;
 import io.trino.spi.function.table.ConnectorTableFunction;
 
 import java.sql.SQLException;
 import java.util.Properties;
 
 import static com.google.inject.multibindings.Multibinder.newSetBinder;
+import static com.google.inject.multibindings.OptionalBinder.newOptionalBinder;
 import static io.airlift.configuration.ConfigBinder.configBinder;
 
 public class TrinoClientModule
@@ -48,6 +50,10 @@ public class TrinoClientModule
     public void setup(Binder binder)
     {
         binder.bind(JdbcClient.class).annotatedWith(ForBaseJdbc.class).to(TrinoClient.class).in(Scopes.SINGLETON);
+        newOptionalBinder(binder, ConnectorAccessControl.class)
+                .setBinding()
+                .to(TrinoReadOnlyAccessControl.class)
+                .in(Scopes.SINGLETON);
         configBinder(binder).bindConfig(BaseJdbcConfig.class);
         configBinder(binder).bindConfig(TypeHandlingJdbcConfig.class);
         configBinder(binder).bindConfigDefaults(TypeHandlingJdbcConfig.class, config -> config.setUnsupportedTypeHandling(UnsupportedTypeHandling.CONVERT_TO_VARCHAR));

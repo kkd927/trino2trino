@@ -30,9 +30,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-import static io.trino.plugin.trino.TrinoDelegationAnalyzer.Decision.LOCAL_FALLBACK;
-import static io.trino.plugin.trino.TrinoDelegationAnalyzer.Decision.REMOTE_DELEGATE;
-import static io.trino.plugin.trino.TrinoDelegationAnalyzer.Decision.UNSUPPORTED;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -54,52 +51,47 @@ class TestTrinoDelegationAnalyzer
     @Test
     void testRemoteDelegate()
     {
-        TrinoDelegationAnalyzer.ExpressionAnalysis analysis = analyzer.analyzePredicate(
-                session(TrinoRemoteDelegationMode.AUTO),
+        assertThat(analyzer.analyzePredicate(
+                session(true),
                 new Call(
                         BOOLEAN,
                         StandardFunctions.EQUAL_OPERATOR_FUNCTION_NAME,
                         List.of(new Variable("nationkey", BIGINT), new Variable("regionkey", BIGINT))),
                 assignments(),
-                capabilities);
-
-        assertThat(analysis.decision()).isEqualTo(REMOTE_DELEGATE);
-        assertThat(analysis.expression()).isPresent();
+                capabilities))
+                .isPresent();
     }
 
     @Test
-    void testAutoFallbackForUnsupportedFunction()
+    void testFallbackForUnsupportedFunction()
     {
-        TrinoDelegationAnalyzer.ExpressionAnalysis analysis = analyzer.analyzePredicate(
-                session(TrinoRemoteDelegationMode.AUTO),
+        assertThat(analyzer.analyzePredicate(
+                session(true),
                 new Call(BOOLEAN, new FunctionName("remote_only_custom_function"), List.of(new Variable("nationkey", BIGINT))),
                 assignments(),
-                capabilities);
-
-        assertThat(analysis.decision()).isEqualTo(LOCAL_FALLBACK);
-        assertThat(analysis.expression()).isEmpty();
+                capabilities))
+                .isEmpty();
     }
 
     @Test
-    void testStrictClassifiesUnsupportedFunction()
+    void testDisabledDelegationRendersNothing()
     {
-        TrinoDelegationAnalyzer.ExpressionAnalysis analysis = analyzer.analyzePredicate(
-                session(TrinoRemoteDelegationMode.STRICT),
-                new Call(BOOLEAN, new FunctionName("remote_only_custom_function"), List.of(new Variable("nationkey", BIGINT))),
+        assertThat(analyzer.analyzePredicate(
+                session(false),
+                new Call(
+                        BOOLEAN,
+                        StandardFunctions.EQUAL_OPERATOR_FUNCTION_NAME,
+                        List.of(new Variable("nationkey", BIGINT), new Variable("regionkey", BIGINT))),
                 assignments(),
-                capabilities);
-
-        assertThat(analysis.decision()).isEqualTo(UNSUPPORTED);
-        assertThat(analysis.reason()).hasValueSatisfying(reason -> assertThat(reason).contains("Predicate cannot be rendered"));
+                capabilities))
+                .isEmpty();
     }
 
-    private static ConnectorSession session(TrinoRemoteDelegationMode mode)
+    private static ConnectorSession session(boolean delegationEnabled)
     {
         return TestingConnectorSession.builder()
                 .setPropertyMetadata(new TrinoRemoteDelegationSessionProperties(new TrinoRemoteDelegationConfig()).getSessionProperties())
-                .setPropertyValues(Map.of(
-                        TrinoRemoteDelegationSessionProperties.REMOTE_DELEGATION_ENABLED, true,
-                        TrinoRemoteDelegationSessionProperties.REMOTE_DELEGATION_MODE, mode.name()))
+                .setPropertyValues(Map.of(TrinoRemoteDelegationSessionProperties.REMOTE_DELEGATION_ENABLED, delegationEnabled))
                 .build();
     }
 

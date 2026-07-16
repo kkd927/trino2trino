@@ -14,20 +14,20 @@
 package io.trino.plugin.trino;
 
 import io.trino.Session;
-import io.trino.plugin.jdbc.BaseJdbcConnectorTest;
-import io.trino.sql.planner.plan.AggregationNode;
-import io.trino.sql.planner.plan.TopNNode;
 import io.trino.testing.DistributedQueryRunner;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.QueryRunner;
 import io.trino.testing.TestingConnectorBehavior;
 import io.trino.testing.sql.SqlExecutor;
+import io.trino.testing.sql.TestTable;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
+import static io.trino.testing.TestingNames.randomNameSuffix;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.junit.jupiter.api.Assumptions.abort;
 
 /**
  * BaseJdbcConnectorTest suite for the trino2trino connector configured as READ-ONLY.
@@ -37,7 +37,7 @@ import static org.junit.jupiter.api.Assumptions.abort;
  * driver bugs, single-node runner constraints).
  */
 class TestTrinoConnectorTest
-        extends BaseJdbcConnectorTest
+        extends TestTrinoConnectorIntegration
 {
     private DistributedQueryRunner remoteRunner;
 
@@ -46,60 +46,42 @@ class TestTrinoConnectorTest
             throws Exception
     {
         remoteRunner = TrinoQueryRunner.createRemoteQueryRunner();
+        try {
+            createRemoteFixtures();
+            return TrinoQueryRunner.builder(remoteRunner)
+                    .setRemoteCatalog("memory")
+                    .setDefaultSchema("default")
+                    .withComplexTypeTestData()
+                    .withRemoteTpchCatalog()
+                    .withStatisticsDisabledCatalog()
+                    .build();
+        }
+        catch (Exception | Error failure) {
+            TrinoQueryRunner.closeOnFailure(remoteRunner, failure);
+            throw failure;
+        }
+    }
 
+    private void createRemoteFixtures()
+    {
         // Pre-populate remote memory catalog with tpch tables as read-only test fixtures.
         // BaseConnectorTest expects nation/region/orders/customer/lineitem/part/partsupp/supplier
         // to exist and be queryable through the connector's default catalog+schema.
+        TrinoQueryRunner.populateTpchData(remoteRunner);
         Session remoteSession = remoteMemorySession();
-        remoteRunner.execute(remoteSession, "CREATE TABLE nation AS SELECT * FROM tpch.tiny.nation");
-        remoteRunner.execute(remoteSession, "CREATE TABLE nation_lowercase AS SELECT nationkey, lower(name) AS name, regionkey FROM tpch.tiny.nation");
-        remoteRunner.execute(remoteSession, "CREATE TABLE region AS SELECT * FROM tpch.tiny.region");
-        remoteRunner.execute(remoteSession, "CREATE TABLE orders AS SELECT * FROM tpch.tiny.orders");
-        remoteRunner.execute(remoteSession, "CREATE TABLE customer AS SELECT * FROM tpch.tiny.customer");
-        remoteRunner.execute(remoteSession, "CREATE TABLE lineitem AS SELECT * FROM tpch.tiny.lineitem");
-        remoteRunner.execute(remoteSession, "CREATE TABLE part AS SELECT * FROM tpch.tiny.part");
-        remoteRunner.execute(remoteSession, "CREATE TABLE partsupp AS SELECT * FROM tpch.tiny.partsupp");
-        remoteRunner.execute(remoteSession, "CREATE TABLE supplier AS SELECT * FROM tpch.tiny.supplier");
-        remoteRunner.execute(remoteSession,
+        remoteRunner.execute(
+                remoteSession,
                 "CREATE TABLE simple_table AS SELECT * FROM (VALUES BIGINT '1', BIGINT '2') AS t(col)");
-        remoteRunner.execute(remoteSession, """
-                CREATE TABLE test_cs_agg_pushdown AS
-                SELECT * FROM (
-                    VALUES
-                        ('A', CAST('A' AS CHAR(1)), BIGINT '1'),
-                        ('B', CAST('B' AS CHAR(1)), BIGINT '1'),
-                        ('a', CAST('a' AS CHAR(1)), BIGINT '3'),
-                        ('b', CAST('b' AS CHAR(1)), BIGINT '4')
-                ) AS t(a_string, a_char, a_bigint)
-                """);
-        remoteRunner.execute(remoteSession, """
-                CREATE TABLE test_case_sensitive_topn_pushdown AS
-                SELECT * FROM (
-                    VALUES
-                        ('A', CAST('A' AS CHAR(10)), BIGINT '1'),
-                        ('B', CAST('B' AS CHAR(10)), BIGINT '2'),
-                        ('a', CAST('a' AS CHAR(10)), BIGINT '3'),
-                        ('b', CAST('b' AS CHAR(10)), BIGINT '4')
-                ) AS t(a_string, a_char, a_bigint)
-                """);
-        remoteRunner.execute(remoteSession, """
-                CREATE TABLE test_null_sensitive_topn_pushdown AS
-                SELECT * FROM (
-                    VALUES
-                        ('small', BIGINT '42'),
-                        ('big', BIGINT '134134'),
-                        ('negative', BIGINT '-15'),
-                        ('null', CAST(NULL AS BIGINT))
-                ) AS t(name, a)
-                """);
-        remoteRunner.execute(remoteSession, """
+        remoteRunner.execute(remoteSession,
+                """
                 CREATE TABLE native_query_unsupported AS
                 SELECT
                     CAST(1 AS BIGINT) AS one,
                     CAST(TIMESTAMP '2024-01-15 10:30:45.123456789012' AS TIMESTAMP(12)) AS two,
                     CAST('ok' AS VARCHAR) AS three
                 """);
-        remoteRunner.execute(remoteSession, """
+        remoteRunner.execute(remoteSession,
+                """
                 CREATE TABLE test_decimal_filter_pushdown AS
                 SELECT * FROM (
                     VALUES
@@ -107,7 +89,8 @@ class TestTrinoConnectorTest
                         ('high', CAST(123.456 AS DECIMAL(10, 3)))
                 ) AS t(id, amount)
                 """);
-        remoteRunner.execute(remoteSession, """
+        remoteRunner.execute(remoteSession,
+                """
                 CREATE TABLE test_timestamp12_filter_pushdown AS
                 SELECT * FROM (
                     VALUES
@@ -115,7 +98,8 @@ class TestTrinoConnectorTest
                         ('after', CAST(TIMESTAMP '2024-01-15 10:30:45.123456789012' AS TIMESTAMP(12)))
                 ) AS t(id, ts_col)
                 """);
-        remoteRunner.execute(remoteSession, """
+        remoteRunner.execute(remoteSession,
+                """
                 CREATE TABLE test_timestamptz12_filter_pushdown AS
                 SELECT * FROM (
                     VALUES
@@ -123,7 +107,8 @@ class TestTrinoConnectorTest
                         ('after', CAST(TIMESTAMP '2024-01-15 10:30:45.123456789012 UTC' AS TIMESTAMP(12) WITH TIME ZONE))
                 ) AS t(id, ts_tz_col)
                 """);
-        remoteRunner.execute(remoteSession, """
+        remoteRunner.execute(remoteSession,
+                """
                 CREATE TABLE test_interval_filter_pushdown AS
                 SELECT * FROM (
                     VALUES
@@ -131,7 +116,8 @@ class TestTrinoConnectorTest
                         ('long', INTERVAL '2' DAY)
                 ) AS t(id, duration)
                 """);
-        remoteRunner.execute(remoteSession, """
+        remoteRunner.execute(remoteSession,
+                """
                 CREATE TABLE test_interval_ym_filter_pushdown AS
                 SELECT * FROM (
                     VALUES
@@ -139,7 +125,8 @@ class TestTrinoConnectorTest
                         ('fourteen_months', INTERVAL '14' MONTH)
                 ) AS t(id, duration)
                 """);
-        remoteRunner.execute(remoteSession, """
+        remoteRunner.execute(remoteSession,
+                """
                 CREATE TABLE test_timetz_filter_pushdown AS
                 SELECT * FROM (
                     VALUES
@@ -147,11 +134,6 @@ class TestTrinoConnectorTest
                         ('late', CAST(TIME '10:30:45.124 +09:00' AS TIME(3) WITH TIME ZONE))
                 ) AS t(id, time_tz_col)
                 """);
-
-        return TrinoQueryRunner.builder(remoteRunner)
-                .setRemoteCatalog("memory")
-                .setDefaultSchema("default")
-                .build();
     }
 
     @Override
@@ -159,6 +141,25 @@ class TestTrinoConnectorTest
     {
         Session remoteSession = remoteMemorySession();
         return sql -> remoteRunner.execute(remoteSession, sql);
+    }
+
+    @Override
+    protected TestTable newTrinoTable(String namePrefix, String tableDefinition, List<String> rowsToInsert)
+    {
+        // The connector is read-only: fixtures that base tests would create through
+        // the connector are created directly on the remote instead. The connector's
+        // default schema maps to the same remote schema, so the tables stay visible.
+        return new TestTable(onRemoteDatabase(), namePrefix, tableDefinition, rowsToInsert);
+    }
+
+    @Override
+    protected Session joinPushdownEnabled(Session session)
+    {
+        return Session.builder(super.joinPushdownEnabled(session))
+                // the default AUTOMATIC strategy requires statistics-based benefit
+                // for every base test case; force pushdown like other JDBC suites
+                .setCatalogSessionProperty(session.getCatalog().orElseThrow(), "join_pushdown_strategy", "EAGER")
+                .build();
     }
 
     private Session remoteMemorySession()
@@ -169,15 +170,24 @@ class TestTrinoConnectorTest
                 .build();
     }
 
-    private Session eagerJoinPushdownSession(boolean complexJoinPushdownEnabled)
+    @Override
+    protected void assertQueryFails(String sql, String expectedMessageRegex)
     {
-        Session session = joinPushdownEnabled(getSession());
-        String catalog = session.getCatalog().orElseThrow();
-        return Session.builder(session)
-                .setCatalogSessionProperty(catalog, "join_pushdown_strategy", "EAGER")
-                .setCatalogSessionProperty(catalog, "complex_join_pushdown_enabled", Boolean.toString(complexJoinPushdownEnabled))
-                .setSystemProperty("enable_dynamic_filtering", "false")
-                .build();
+        super.assertQueryFails(sql, readOnlyFailurePattern(expectedMessageRegex));
+    }
+
+    @Override
+    protected void assertQueryFails(Session session, String sql, String expectedMessageRegex)
+    {
+        super.assertQueryFails(session, sql, readOnlyFailurePattern(expectedMessageRegex));
+    }
+
+    private static String readOnlyFailurePattern(String expectedMessageRegex)
+    {
+        if (expectedMessageRegex.startsWith("This connector does not support")) {
+            return "(?s)(?:" + expectedMessageRegex + "|Access Denied:.*)";
+        }
+        return expectedMessageRegex;
     }
 
     // =========================================================================
@@ -194,14 +204,18 @@ class TestTrinoConnectorTest
 
             // Pushdown: both sides are Trino with identical SQL syntax
             case SUPPORTS_LIMIT_PUSHDOWN,
-                 SUPPORTS_TOPN_PUSHDOWN,
                  SUPPORTS_AGGREGATION_PUSHDOWN,
                  SUPPORTS_AGGREGATION_PUSHDOWN_COUNT_DISTINCT -> true;
+            // Remote TopN is still applied, but transport projection can wrap it in
+            // an outer query, so local ordering verification must remain in the plan.
+            case SUPPORTS_TOPN_PUSHDOWN -> false;
             case SUPPORTS_JOIN_PUSHDOWN,
                  SUPPORTS_JOIN_PUSHDOWN_WITH_FULL_JOIN,
-                 SUPPORTS_JOIN_PUSHDOWN_WITH_VARCHAR_EQUALITY -> true;
-            case SUPPORTS_JOIN_PUSHDOWN_WITH_DISTINCT_FROM -> false;
-            case SUPPORTS_JOIN_PUSHDOWN_WITH_VARCHAR_INEQUALITY -> false;
+                 SUPPORTS_JOIN_PUSHDOWN_WITH_VARCHAR_EQUALITY,
+                 // IS [NOT] DISTINCT FROM and varchar inequality conditions render
+                 // through the delegation path; both sides share Trino semantics
+                 SUPPORTS_JOIN_PUSHDOWN_WITH_DISTINCT_FROM,
+                 SUPPORTS_JOIN_PUSHDOWN_WITH_VARCHAR_INEQUALITY -> true;
             case SUPPORTS_PREDICATE_ARITHMETIC_EXPRESSION_PUSHDOWN -> true;
             // Advanced statistical aggregation functions not yet implemented
             case SUPPORTS_AGGREGATION_PUSHDOWN_STDDEV,
@@ -238,7 +252,6 @@ class TestTrinoConnectorTest
             case SUPPORTS_NOT_NULL_CONSTRAINT -> false;
             case SUPPORTS_CREATE_VIEW,
                  SUPPORTS_CREATE_MATERIALIZED_VIEW -> false;
-            case SUPPORTS_NEGATIVE_DATE -> false;
 
             default -> super.hasBehavior(connectorBehavior);
         };
@@ -394,6 +407,9 @@ class TestTrinoConnectorTest
         assertThat(query("SELECT id FROM test_interval_filter_pushdown WHERE duration > INTERVAL '1' DAY"))
                 .isFullyPushedDown()
                 .matches("VALUES CAST('long' AS VARCHAR(5))");
+        assertThat(query("SELECT id FROM test_interval_filter_pushdown WHERE duration > INTERVAL '-1' DAY"))
+                .isFullyPushedDown()
+                .matches("VALUES CAST('short' AS VARCHAR(5)), CAST('long' AS VARCHAR(5))");
     }
 
     @Test
@@ -416,29 +432,65 @@ class TestTrinoConnectorTest
     @Override
     public void testNativeQueryCreateStatement()
     {
-        abort("DDL passthrough is outside the supported row-returning read contract");
+        assertPassthroughStatementRejected("CREATE TABLE memory.default.native_query_create AS SELECT 1 AS value");
+        assertThat(computeRemoteActual("SHOW TABLES").getOnlyColumnAsSet())
+                .doesNotContain("native_query_create");
     }
 
     @Test
     @Override
     public void testNativeQueryInsertStatementTableDoesNotExist()
     {
-        abort("DML passthrough is outside the supported row-returning read contract");
+        assertPassthroughStatementRejected("INSERT INTO memory.default.native_query_missing VALUES (1)");
+        assertThat(computeRemoteActual("SHOW TABLES").getOnlyColumnAsSet())
+                .doesNotContain("native_query_missing");
     }
 
     @Test
     @Override
     public void testNativeQueryInsertStatementTableExists()
     {
-        abort("DML passthrough is outside the supported row-returning read contract");
+        assertPassthroughStatementRejected("INSERT INTO memory.default.nation VALUES (99, 'TEST', 0, 'test')");
+        assertThat(computeRemoteActual("SELECT count(*) FROM nation WHERE nationkey = 99").getOnlyValue())
+                .isEqualTo(0L);
+    }
+
+    @Test
+    void testNativeQueryDeleteStatement()
+    {
+        assertPassthroughStatementRejected("DELETE FROM memory.default.nation WHERE nationkey = 0");
+        assertThat(computeRemoteActual("SELECT count(*) FROM nation WHERE nationkey = 0").getOnlyValue())
+                .isEqualTo(1L);
+    }
+
+    @Test
+    void testNativeQueryUpdateStatement()
+    {
+        assertPassthroughStatementRejected("UPDATE memory.default.nation SET name = 'X' WHERE nationkey = 0");
+        assertThat(computeRemoteActual("SELECT name FROM nation WHERE nationkey = 0").getOnlyValue())
+                .isEqualTo("ALGERIA");
+    }
+
+    @Test
+    void testNativeQueryCallStatement()
+    {
+        // Only the local rejection is asserted: there is no observable remote
+        // procedure, so a remote-state invariant would be vacuous here
+        assertPassthroughStatementRejected("CALL system.runtime.kill_query('query-id', 'reason')");
+    }
+
+    private MaterializedResult computeRemoteActual(String sql)
+    {
+        return remoteRunner.execute(remoteMemorySession(), sql);
     }
 
     @Test
     @Override
     public void testNativeQueryIncorrectSyntax()
     {
-        // Through federation, syntax errors are caught by the remote before
-        // reaching the passthrough handler, producing a TrinoException.
+        // The passthrough validator parses the statement locally before any
+        // remote contact, so the syntax error comes from the local parser,
+        // not the remote cluster.
         assertThatThrownBy(() -> computeActual(
                 "SELECT * FROM TABLE(system.query(query => 'SOME INCORRECT SYNTAX'))"))
                 .hasMessageContaining("mismatched input");
@@ -448,226 +500,69 @@ class TestTrinoConnectorTest
     // Architectural overrides -- type compatibility through federation
     // =========================================================================
 
-    @Test
-    @Override
-    public void testDataMappingSmokeTest()
+    private void assertPassthroughStatementRejected(String sql)
     {
-        // Data mapping smoke test creates tables to verify type round-trips;
-        // not feasible with a read-only connector.
-        abort("Data mapping smoke test requires write support to create test tables");
-    }
-
-    // =========================================================================
-    // Architectural overrides -- planner-level pushdown verification
-    //
-    // Base limit/topN pushdown tests are inherited as-is. These overrides
-    // restore planner-level assertions for aggregation and validate join
-    // pushdown in a read-only federation fixture setup.
-    // =========================================================================
-
-    @Test
-    @Override
-    public void testAggregationPushdown()
-    {
-        assertThat(query("SELECT count(*) FROM nation")).isFullyPushedDown();
-        assertThat(query("SELECT max(regionkey) FROM nation")).isFullyPushedDown();
-        assertThat(query("SELECT min(regionkey) FROM nation")).isFullyPushedDown();
-        assertThat(query("SELECT count(DISTINCT regionkey) FROM nation")).isFullyPushedDown();
-        assertThat(query("SELECT regionkey, count(*) FROM nation GROUP BY regionkey")).isFullyPushedDown();
-    }
-
-    @Test
-    @Override
-    public void testNumericAggregationPushdown()
-    {
-        assertThat(query("SELECT sum(nationkey) FROM nation")).isFullyPushedDown();
-        assertThat(query("SELECT count(nationkey) FROM nation")).isFullyPushedDown();
-        assertThat(query("SELECT regionkey, sum(nationkey) FROM nation GROUP BY regionkey")).isFullyPushedDown();
-    }
-
-    @Test
-    @Override
-    public void testCaseSensitiveAggregationPushdown()
-    {
-        assertCaseSensitiveAggregationLocal(
-                "SELECT max(a_string), min(a_string), max(a_char), min(a_char) FROM test_cs_agg_pushdown",
-                "VALUES ('b', 'A', 'b', 'A')");
-        assertCaseSensitiveAggregationPushedDown(
-                "SELECT DISTINCT a_string FROM test_cs_agg_pushdown",
-                "VALUES 'A', 'B', 'a', 'b'");
-        assertCaseSensitiveAggregationPushedDown(
-                "SELECT DISTINCT a_char FROM test_cs_agg_pushdown",
-                "VALUES 'A', 'B', 'a', 'b'");
-
-        assertThat(query("SELECT count(a_string), count(a_char) FROM test_cs_agg_pushdown"))
-                .isFullyPushedDown();
-        assertThat(query("SELECT count(a_string), count(a_char) FROM test_cs_agg_pushdown GROUP BY a_bigint"))
-                .isFullyPushedDown();
-    }
-
-    @Test
-    @Override
-    public void testComplexJoinPushdown()
-    {
-        String query = """
-                SELECT n.name, o.orderstatus
-                FROM nation n
-                JOIN orders o ON n.regionkey = o.orderkey
-                    AND n.nationkey + o.custkey - 3 = 0
-                """;
-
-        assertThat(query(eagerJoinPushdownSession(false), query))
-                .joinIsNotFullyPushedDown();
-
-        assertThat(query(eagerJoinPushdownSession(true), query))
-                .isFullyPushedDown();
-    }
-
-    @Test
-    @Override
-    public void testJoinPushdown()
-    {
-        Session session = eagerJoinPushdownSession(false);
-
-        assertThat(query(session, "SELECT r.name, n.name FROM nation n JOIN region r ON n.regionkey = r.regionkey"))
-                .isFullyPushedDown();
-        assertThat(query(session, "SELECT r.name, n.name FROM nation n LEFT JOIN region r ON n.regionkey = r.regionkey"))
-                .isFullyPushedDown();
-        assertThat(query(session, "SELECT r.name, n.name FROM nation n FULL JOIN region r ON n.regionkey = r.regionkey"))
-                .isFullyPushedDown();
-        assertThat(query(session, "SELECT r.name, n.name FROM nation n JOIN region r USING (regionkey)"))
-                .isFullyPushedDown();
-        assertThat(query(session, "SELECT r.name, n.name FROM nation n JOIN region r ON n.regionkey IS NOT DISTINCT FROM r.regionkey"))
-                .joinIsNotFullyPushedDown();
-        assertThat(query(session, "SELECT r.name, n.name FROM nation n JOIN region r ON n.regionkey <> r.regionkey"))
-                .joinIsNotFullyPushedDown();
-        assertThat(query(session, "SELECT n.name, n2.regionkey FROM nation n JOIN nation n2 ON n.name = n2.name"))
-                .isFullyPushedDown();
-        assertThat(query(session, "SELECT n.name, nl.regionkey FROM nation n JOIN nation_lowercase nl ON n.name > nl.name"))
-                .joinIsNotFullyPushedDown();
-    }
-
-    @Test
-    @Override
-    public void testArithmeticPredicatePushdown()
-    {
-        assertThat(query("SELECT nationkey FROM nation WHERE nationkey + 1 > 24"))
-                .matches("VALUES BIGINT '24'");
-    }
-
-    @Test
-    @Override
-    public void testCaseSensitiveTopNPushdown()
-    {
-        boolean expectPushdown = hasBehavior(TestingConnectorBehavior.SUPPORTS_TOPN_PUSHDOWN_WITH_VARCHAR);
-
-        assertCaseSensitiveTopN(
-                "SELECT a_bigint FROM test_case_sensitive_topn_pushdown ORDER BY a_string ASC LIMIT 2",
-                expectPushdown,
-                "VALUES CAST(1 AS BIGINT), CAST(2 AS BIGINT)");
-        assertCaseSensitiveTopN(
-                "SELECT a_bigint FROM test_case_sensitive_topn_pushdown ORDER BY a_string DESC LIMIT 2",
-                expectPushdown,
-                "VALUES CAST(4 AS BIGINT), CAST(3 AS BIGINT)");
-        assertCaseSensitiveTopN(
-                "SELECT a_bigint FROM test_case_sensitive_topn_pushdown ORDER BY a_char ASC LIMIT 2",
-                expectPushdown,
-                "VALUES CAST(1 AS BIGINT), CAST(2 AS BIGINT)");
-        assertCaseSensitiveTopN(
-                "SELECT a_bigint FROM test_case_sensitive_topn_pushdown ORDER BY a_char DESC LIMIT 2",
-                expectPushdown,
-                "VALUES CAST(4 AS BIGINT), CAST(3 AS BIGINT)");
-    }
-
-    @Test
-    @Override
-    public void testNullSensitiveTopNPushdown()
-    {
-        assertThat(query("SELECT name FROM test_null_sensitive_topn_pushdown ORDER BY a ASC NULLS FIRST LIMIT 5"))
-                .ordered()
-                .isFullyPushedDown()
-                .matches("VALUES 'null', 'negative', 'small', 'big'");
-        assertThat(query("SELECT name FROM test_null_sensitive_topn_pushdown ORDER BY a ASC NULLS LAST LIMIT 5"))
-                .ordered()
-                .isFullyPushedDown()
-                .matches("VALUES 'negative', 'small', 'big', 'null'");
-        assertThat(query("SELECT name FROM test_null_sensitive_topn_pushdown ORDER BY a DESC NULLS FIRST LIMIT 5"))
-                .ordered()
-                .isFullyPushedDown()
-                .matches("VALUES 'null', 'big', 'small', 'negative'");
-        assertThat(query("SELECT name FROM test_null_sensitive_topn_pushdown ORDER BY a DESC NULLS LAST LIMIT 5"))
-                .ordered()
-                .isFullyPushedDown()
-                .matches("VALUES 'big', 'small', 'negative', 'null'");
-    }
-
-    @Test
-    @Override
-    public void testLimitPushdownWithDistinctAndJoin()
-    {
-        MaterializedResult result = computeActual("""
-                SELECT DISTINCT n.name
-                FROM nation n
-                JOIN region r ON n.regionkey = r.regionkey
-                LIMIT 5""");
-        assertThat(result.getRowCount()).isEqualTo(5);
+        assertThatThrownBy(() -> computeActual("SELECT * FROM TABLE(system.query(query => '" + sql.replace("'", "''") + "'))"))
+                .hasMessageContaining("system.query only supports row-returning read queries");
     }
 
     // =========================================================================
     // Architectural overrides -- procedure and runner constraints
     // =========================================================================
 
+    // The procedure is inherited from base-jdbc, but this connector exposes a
+    // read-only surface and denies it before the remote SQL is executed.
     @Test
     @Override
     public void testExecuteProcedure()
     {
-        abort("No procedure support through federation");
+        String tableName = "test_execute" + randomNameSuffix();
+        String schemaTableName = "memory.default." + tableName;
+
+        assertExecuteProcedureDenied("CALL system.execute('CREATE TABLE " + schemaTableName + " (a int)')");
+        assertThat(computeRemoteActual("SHOW TABLES FROM memory.default LIKE '" + tableName + "'").getRowCount()).isEqualTo(0);
     }
 
     @Test
     @Override
     public void testExecuteProcedureWithNamedArgument()
     {
-        abort("No procedure support through federation");
+        String tableName = "test_execute" + randomNameSuffix();
+        String schemaTableName = "memory.default." + tableName;
+
+        assertExecuteProcedureDenied("CALL system.execute(query => 'CREATE TABLE " + schemaTableName + " (a int)')");
+        assertThat(computeRemoteActual("SHOW TABLES FROM memory.default LIKE '" + tableName + "'").getRowCount()).isEqualTo(0);
     }
 
     @Test
     @Override
     public void testExecuteProcedureWithInvalidQuery()
     {
-        abort("No procedure support through federation");
+        assertExecuteProcedureDenied("CALL system.execute('some incorrect syntax')");
     }
 
     @Test
-    @Override
-    public void ensureDistributedQueryRunner()
+    void testFlushMetadataCacheProcedure()
     {
-        abort("Single-node test runner -- distributed runner check not applicable");
+        assertUpdate("CALL system.flush_metadata_cache()");
     }
 
-    private void assertCaseSensitiveAggregationLocal(String sql, String expected)
+    @Test
+    void testDropNotNullConstraintDoesNotMutateRemoteTable()
     {
-        var assertion = assertThat(query(sql)).skippingTypesCheck();
-        assertion.isNotFullyPushedDown(AggregationNode.class);
-        assertion.matches(expected);
-    }
-
-    private void assertCaseSensitiveAggregationPushedDown(String sql, String expected)
-    {
-        var assertion = assertThat(query(sql)).skippingTypesCheck();
-        assertion.isFullyPushedDown();
-        assertion.matches(expected);
-    }
-
-    private void assertCaseSensitiveTopN(String sql, boolean expectPushdown, String expected)
-    {
-        var assertion = assertThat(query(sql)).ordered();
-        if (expectPushdown) {
-            assertion.isFullyPushedDown();
+        try (TestTable table = new TestTable(onRemoteDatabase(), "test_not_null", "(value bigint NOT NULL)")) {
+            assertThatThrownBy(() -> computeActual("ALTER TABLE " + table.getName() + " ALTER COLUMN value DROP NOT NULL"))
+                    .hasMessageContaining("Access Denied");
+            assertThat(computeRemoteActual("SELECT is_nullable FROM information_schema.columns " +
+                    "WHERE table_schema = 'default' AND table_name = '" + table.getName() + "' AND column_name = 'value'").getOnlyValue())
+                    .isEqualTo("NO");
         }
-        else {
-            assertion.isNotFullyPushedDown(TopNNode.class);
-        }
-        assertion.matches(expected);
+    }
+
+    private void assertExecuteProcedureDenied(String sql)
+    {
+        assertThatThrownBy(() -> computeActual(sql))
+                .hasMessageContaining("Access Denied")
+                .hasMessageContaining("Cannot execute procedure system.execute");
     }
 }

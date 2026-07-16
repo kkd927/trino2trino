@@ -29,13 +29,15 @@ import static java.util.Objects.requireNonNull;
 record TrinoRemoteCapabilities(
         Optional<String> version,
         Optional<Set<String>> functions,
-        Optional<String> timeZone)
+        Optional<String> timeZone,
+        Optional<CharToVarcharCastSemantics> charToVarcharCastSemantics)
 {
     TrinoRemoteCapabilities
     {
         version = requireNonNull(version, "version is null");
         functions = requireNonNull(functions, "functions is null").map(Set::copyOf);
         timeZone = requireNonNull(timeZone, "timeZone is null");
+        charToVarcharCastSemantics = requireNonNull(charToVarcharCastSemantics, "charToVarcharCastSemantics is null");
     }
 
     static TrinoRemoteCapabilities load(Connection connection)
@@ -45,17 +47,31 @@ record TrinoRemoteCapabilities(
         return new TrinoRemoteCapabilities(
                 Optional.ofNullable(connection.getMetaData().getDatabaseProductVersion()),
                 Optional.of(loadFunctionNames(connection)),
-                loadCurrentTimeZone(connection));
+                loadCurrentTimeZone(connection),
+                loadCharToVarcharCastSemantics(connection));
     }
 
     static TrinoRemoteCapabilities unavailable()
     {
-        return new TrinoRemoteCapabilities(Optional.empty(), Optional.empty(), Optional.empty());
+        return new TrinoRemoteCapabilities(Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty());
     }
 
     static TrinoRemoteCapabilities forTesting(Set<String> functions)
     {
-        return new TrinoRemoteCapabilities(Optional.of("477"), Optional.of(functions), Optional.of("UTC"));
+        return new TrinoRemoteCapabilities(
+                Optional.of("477"),
+                Optional.of(functions),
+                Optional.of("UTC"),
+                Optional.of(CharToVarcharCastSemantics.TRIMS_TRAILING_SPACES));
+    }
+
+    static TrinoRemoteCapabilities forTestingLegacyCharToVarcharCast(Set<String> functions)
+    {
+        return new TrinoRemoteCapabilities(
+                Optional.of("477"),
+                Optional.of(functions),
+                Optional.of("UTC"),
+                Optional.of(CharToVarcharCastSemantics.RETAINS_TRAILING_SPACES));
     }
 
     boolean hasFunction(String name)
@@ -72,6 +88,12 @@ record TrinoRemoteCapabilities(
         return timeZone
                 .map(remoteTimeZone -> remoteTimeZone.equalsIgnoreCase(session.getTimeZoneKey().getId()))
                 .orElse(false);
+    }
+
+    enum CharToVarcharCastSemantics
+    {
+        TRIMS_TRAILING_SPACES,
+        RETAINS_TRAILING_SPACES,
     }
 
     private static Set<String> loadFunctionNames(Connection connection)
@@ -97,5 +119,23 @@ record TrinoRemoteCapabilities(
             }
         }
         return Optional.empty();
+    }
+
+    private static Optional<CharToVarcharCastSemantics> loadCharToVarcharCastSemantics(Connection connection)
+    {
+        try (Statement statement = connection.createStatement();
+                ResultSet resultSet = statement.executeQuery("SELECT length(CAST(CAST('a' AS CHAR(3)) AS VARCHAR))")) {
+            if (!resultSet.next()) {
+                return Optional.empty();
+            }
+            return switch (resultSet.getInt(1)) {
+                case 1 -> Optional.of(CharToVarcharCastSemantics.TRIMS_TRAILING_SPACES);
+                case 3 -> Optional.of(CharToVarcharCastSemantics.RETAINS_TRAILING_SPACES);
+                default -> Optional.empty();
+            };
+        }
+        catch (SQLException ignored) {
+            return Optional.empty();
+        }
     }
 }
