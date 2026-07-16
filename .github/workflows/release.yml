@@ -22,15 +22,15 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Set up JDK 25
-        uses: actions/setup-java@v4
+      - name: Set up JDK 24
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "25"
+          java-version: "24"
           cache: maven
 
       - name: Restore required Trino build metadata
@@ -52,8 +52,27 @@ jobs:
         shell: bash
         run: .github/scripts/bootstrap-trino-deps.sh
 
-      - name: Build and test
+      - name: Build, test, and package plugin
         run: mvn -B clean verify
+
+      - name: Run remote Delta smoke
+        run: testing/remote-delta-smoke/run.sh
+
+      - name: Select remote version smoke versions
+        id: remote_version_smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          trino_version="$(grep -A 3 '<parent>' pom.xml | grep '<version>' | head -n 1 | sed -E 's/.*<version>([^<]+)<.*/\1/')"
+          versions="$(.agents/skills/trino-release/scripts/select-remote-version-smoke-versions.sh "${trino_version}")"
+
+          echo "versions=${versions}" >> "${GITHUB_OUTPUT}"
+          echo "Selected remote version smoke versions: ${versions:-none}"
+
+      - name: Run remote version smoke
+        if: ${{ steps.remote_version_smoke.outputs.versions != '' }}
+        run: testing/remote-version-smoke/run.sh ${{ steps.remote_version_smoke.outputs.versions }}
 
       - name: Collect release assets
         id: assets
@@ -61,14 +80,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          plugin_zip="$(find target -maxdepth 1 -type f -name 'trino-trino-*.zip' | head -n 1)"
+          mapfile -t plugin_zips < <(find target -maxdepth 1 -type f -name 'trino-trino-*.zip' | sort)
           sha_file="target/SHA256SUMS.txt"
 
-          if [[ -z "${plugin_zip}" ]]; then
-            echo "Expected plugin artifacts were not created"
+          if [[ "${#plugin_zips[@]}" -ne 1 ]]; then
+            echo "Expected exactly one plugin ZIP, found ${#plugin_zips[@]}"
+            printf '%s\n' "${plugin_zips[@]}"
             exit 1
           fi
 
+          plugin_zip="${plugin_zips[0]}"
           sha256sum "${plugin_zip}" > "${sha_file}"
 
           {
@@ -108,3 +129,46 @@ jobs:
               --title "${tag}" \
               --notes-file RELEASE_NOTES.md
           fi
+
+      - name: Update supported release index
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^trino-[0-9]+-r[0-9]+$ ]]; then
+            echo "Skipping RELEASES.md update for ${GITHUB_REF_NAME}."
+            exit 0
+          fi
+
+          github_host="${GITHUB_SERVER_URL#https://}"
+          github_host="${github_host#http://}"
+          default_branch="$(gh api --hostname "${github_host}" "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')"
+
+          git fetch origin "${default_branch}"
+          git checkout -B "${default_branch}" "origin/${default_branch}"
+          git pull --ff-only origin "${default_branch}"
+
+          bash .github/scripts/update-supported-releases.sh
+
+          if [[ -z "$(git status --porcelain -- RELEASES.md)" ]]; then
+            echo "RELEASES.md is already up to date."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add RELEASES.md
+          git commit -m "docs: update supported Trino releases [skip ci]"
+          git push origin "HEAD:${default_branch}"
+
+      - name: Upload release diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-diagnostics
+          path: |
+            target/surefire-reports/**
+            target/failsafe-reports/**
+            target/remote-delta-smoke/**
+            target/remote-version-smoke/**
+          if-no-files-found: ignore

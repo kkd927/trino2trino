@@ -1,0 +1,7 @@
+interface:
+  display_name: "Trino Release"
+  short_description: "Prepare versioned Trino connector releases"
+  default_prompt: "Use $trino-release to prepare a local Trino connector release for a requested version."
+
+policy:
+  allow_implicit_invocation: false

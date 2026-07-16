@@ -11,19 +11,23 @@ on:
       - "release/trino-*"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Set up JDK 25
-        uses: actions/setup-java@v4
+      - name: Set up JDK 24
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "25"
+          java-version: "24"
           cache: maven
 
       - name: Restore required Trino build metadata
@@ -48,13 +52,16 @@ jobs:
       - name: Build and test
         run: mvn -B clean verify
 
-      - name: Upload build artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: Run remote Delta smoke
+        run: testing/remote-delta-smoke/run.sh
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v6
         with:
-          name: trino-trino-build-artifacts
+          name: test-reports
           path: |
-            target/trino-trino-*.zip
-            target/trino-trino-*.jar
             target/surefire-reports/**
-          if-no-files-found: warn
+            target/failsafe-reports/**
+            target/remote-delta-smoke/**
+          if-no-files-found: ignore

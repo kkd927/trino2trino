@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.trino;
 
+import com.google.common.collect.ImmutableSet;
 import io.trino.plugin.jdbc.JdbcColumnHandle;
 import io.trino.plugin.jdbc.JdbcExpression;
 import io.trino.plugin.jdbc.JdbcTypeHandle;
@@ -54,10 +55,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 
 import static io.trino.plugin.trino.TrinoCompatibilityRegistry.canonicalName;
 import static io.trino.plugin.trino.TrinoCompatibilityRegistry.isSubscriptFunction;
+import static io.trino.plugin.trino.TrinoRemoteCapabilities.CharToVarcharCastSemantics.RETAINS_TRAILING_SPACES;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
@@ -72,6 +75,15 @@ final class TrinoRemoteSqlRenderer
         this.compatibilityRegistry = requireNonNull(compatibilityRegistry, "compatibilityRegistry is null");
     }
 
+    private static final Set<FunctionName> COMPARISON_FUNCTION_NAMES = ImmutableSet.of(
+            StandardFunctions.EQUAL_OPERATOR_FUNCTION_NAME,
+            StandardFunctions.NOT_EQUAL_OPERATOR_FUNCTION_NAME,
+            StandardFunctions.LESS_THAN_OPERATOR_FUNCTION_NAME,
+            StandardFunctions.LESS_THAN_OR_EQUAL_OPERATOR_FUNCTION_NAME,
+            StandardFunctions.GREATER_THAN_OPERATOR_FUNCTION_NAME,
+            StandardFunctions.GREATER_THAN_OR_EQUAL_OPERATOR_FUNCTION_NAME,
+            StandardFunctions.IDENTICAL_OPERATOR_FUNCTION_NAME);
+
     Optional<ParameterizedExpression> renderExpression(
             ConnectorSession session,
             ConnectorExpression expression,
@@ -82,7 +94,39 @@ final class TrinoRemoteSqlRenderer
         requireNonNull(expression, "expression is null");
         requireNonNull(assignments, "assignments is null");
         requireNonNull(capabilities, "capabilities is null");
+        if (isBareConstantComparison(expression)) {
+            // Top-level comparisons of a bare column against a constant are reserved
+            // for the baseline rewriter: the upstream join pushdown contract expects
+            // constant join conditions to delegate only through its rules (exact
+            // numeric and varchar constants). On the predicate path this shape only
+            // arrives as a join condition (in WHERE clauses it is subsumed by the
+            // tuple domain), but top-level projections of this shape reach here too
+            // and deliberately fall back to local evaluation.
+            return Optional.empty();
+        }
         return render(session, expression, assignments, capabilities);
+    }
+
+    private static boolean isBareConstantComparison(ConnectorExpression expression)
+    {
+        if (!(expression instanceof Call call) || call.getArguments().size() != 2) {
+            return false;
+        }
+        if (!COMPARISON_FUNCTION_NAMES.contains(call.getFunctionName())) {
+            return false;
+        }
+        ConnectorExpression left = call.getArguments().get(0);
+        ConnectorExpression right = call.getArguments().get(1);
+        boolean bareComparison = (left instanceof Variable && isParameterConstant(right)) ||
+                (isParameterConstant(left) && right instanceof Variable);
+        return bareComparison;
+    }
+
+    private static boolean isParameterConstant(ConnectorExpression expression)
+    {
+        // NULL constants render as typed literals without parameters, so they are
+        // not subject to the constant binding contract above
+        return expression instanceof Constant constant && constant.getValue() != null;
     }
 
     Optional<JdbcExpression> renderProjection(
@@ -237,10 +281,7 @@ final class TrinoRemoteSqlRenderer
             return Optional.of(new ParameterizedExpression(identifierQuote.apply(column.getColumnName()), List.of()));
         }
         if (expression instanceof Constant constant) {
-            if (constant.getValue() == null) {
-                return Optional.of(new ParameterizedExpression("CAST(NULL AS " + typeName(constant.getType()) + ")", List.of()));
-            }
-            return Optional.of(new ParameterizedExpression("?", List.of(new QueryParameter(constant.getType(), Optional.of(constant.getValue())))));
+            return TrinoParameterBindingFactory.bindConstant(constant);
         }
         if (expression instanceof FieldDereference fieldDereference) {
             return renderFieldDereference(session, fieldDereference, assignments, capabilities);
@@ -372,9 +413,21 @@ final class TrinoRemoteSqlRenderer
         if (value.isEmpty()) {
             return Optional.empty();
         }
+
+        ParameterizedExpression renderedValue = value.orElseThrow();
+        String sourceExpression = renderedValue.expression();
+        Type sourceType = call.getArguments().getFirst().getType();
+        Type targetType = call.getType();
+        if (sourceType instanceof CharType && targetType instanceof VarcharType) {
+            Optional<TrinoRemoteCapabilities.CharToVarcharCastSemantics> semantics = capabilities.charToVarcharCastSemantics();
+            if (semantics.filter(semanticsValue -> semanticsValue == RETAINS_TRAILING_SPACES).isEmpty()) {
+                return Optional.empty();
+            }
+        }
+
         return Optional.of(new ParameterizedExpression(
-                (tryCast ? "TRY_CAST(" : "CAST(") + value.orElseThrow().expression() + " AS " + typeName(call.getType()) + ")",
-                value.orElseThrow().parameters()));
+                (tryCast ? "TRY_CAST(" : "CAST(") + sourceExpression + " AS " + typeName(targetType) + ")",
+                renderedValue.parameters()));
     }
 
     private Optional<ParameterizedExpression> renderNary(
