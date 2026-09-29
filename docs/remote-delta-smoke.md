@@ -16,9 +16,9 @@ The smoke test starts:
 - `trino-local-delta`: Trino 482 with the `trino2trino` plugin mounted from
   `target/trino-trino-482`
 - `trino-remote-delta`: Trino 482 with a native `delta_lake` catalog
-- MinIO as S3-compatible object storage
+- Adobe S3Mock as S3-compatible object storage
 - Apache Hive Metastore with an embedded Derby backend and Hadoop S3A support
-  for validating Delta table locations stored in MinIO
+  for validating Delta table locations stored in S3Mock
 
 The test creates tiny Delta tables through remote Trino, then queries them
 through the local `remote_delta` catalog.
@@ -69,7 +69,7 @@ Useful endpoints while the stack is running:
 
 - local federated Trino: `http://localhost:18080`
 - remote Delta Trino: `http://localhost:19080`
-- MinIO console: `http://localhost:19001`
+- S3Mock HTTP endpoint: `http://localhost:19000`
 - Hive Metastore thrift: `localhost:19083`
 
 ## Notes
@@ -77,9 +77,9 @@ Useful endpoints while the stack is running:
 - The Hive Metastore image extends `apache/hive:4.0.1` only by copying the
   bundled Hadoop S3A jars into Hive's runtime classpath. The smoke stack also
   mounts a small `core-site.xml` so the metastore can validate `s3://` Delta
-  table locations against MinIO. It uses embedded Derby to keep the smoke test
+  table locations against S3Mock. It uses embedded Derby to keep the smoke test
   lightweight and self-contained. Production deployments should use a durable
   metastore backend.
-- The Delta catalog uses MinIO credentials intended only for local testing.
+- The Delta catalog uses dummy S3 credentials intended only for local testing.
 - The default CI path runs this smoke test after `mvn -B clean verify` and uses
   the `target/trino-trino-482` package created by that build.

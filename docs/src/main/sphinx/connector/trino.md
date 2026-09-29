@@ -6,7 +6,8 @@ as a local read-only catalog.
 ## Requirements
 
 - Remote Trino must be reachable through the Trino JDBC driver
-- This connector is currently tested against Trino 482 querying remote Trino 482
+- Full integration coverage uses Trino 482 querying remote Trino 482; bounded
+  smoke tests also cover selected older remote versions
 
 ## Configuration
 
@@ -75,11 +76,12 @@ JOIN remote.external_schema.external_table r
 
 ## Type mapping
 
-The connector uses five transport modes:
+The connector uses six transport modes:
 
 - **Native**: JDBC preserves the type exactly
 - **VARCHAR transport**: unsupported scalar temporal or interval values are projected as ``VARCHAR`` and decoded back to the original logical type
 - **VARBINARY transport**: top-level sketch types are projected as ``VARBINARY`` and decoded back to the original logical type
+- **Geospatial EWKB transport**: top-level ``Geometry`` and ``SphericalGeography`` values are projected as EWKB and restored as native types
 - **JSON transport**: unsupported structural columns are recursively rewritten, projected as JSON text, and decoded back to the original logical type
 - **Unsupported**: only types that still cannot be represented safely
 
@@ -141,6 +143,34 @@ JSON transport contract:
 - ``map(non-varchar, v)`` is normalized to ``array(row(key, value))``
 - row fields are encoded positionally and reconstructed by the declared row type
 - nested unsupported scalar leaves are encoded through string surrogates
+- nested ``Geometry`` and ``SphericalGeography`` leaves use hex-encoded EWKB,
+  including values in arrays, maps (keys and values), and rows
+
+### Geospatial EWKB transport
+
+``Geometry`` uses ``ST_AsEWKB(column)``; ``SphericalGeography`` uses
+``ST_AsEWKB(to_geometry(column))``. The connector restores the original native
+type locally. This requires ``ST_AsEWKB`` on the remote instance (available
+from Trino 481) and an EWKB-backed geospatial type on the local instance. The
+current Trino 482 plugin is tested against remote 481 and 482 for native
+geospatial reads. The existing plugin release for local Trino 481 does not yet
+include this feature. Native geospatial reads from remote Trino 480 or older
+are not supported; there is no automatic ``VARCHAR`` fallback for these
+versions.
+
+With Trino 482 on both sides, reads preserve ``Geometry`` SRIDs, empty and
+multi geometries, and nulls, including values nested in arrays, maps (keys and
+values), and rows. The 482-to-481 smoke test also covers 2D values with SRID.
+Trino 482 itself does not preserve Z coordinates; 3D geospatial support was
+added in Trino 483. Ordinary tables and ``system.query`` results use the same
+transport path. A local Trino
+installation must have its geospatial plugin available for native type
+resolution (standard Trino distributions include it). This connector does not
+write geospatial values or push down geospatial-key joins, predicates, or
+functions. Some local ``Geometry`` equality joins may fail with dynamic
+filtering on Trino 482; normal reads, local spatial functions, and joins on
+ordinary keys do not require disabling dynamic filtering. The exact failing
+call path has not been established.
 
 ### VARBINARY transport
 
@@ -261,6 +291,8 @@ Pushdown behavior for transport-backed columns is split:
   ``INTERVAL '0.001' SECOND * CAST(? AS BIGINT)``
 - structural ``JSON`` transport remains ``DISABLE_PUSHDOWN``
 - sketch ``VARBINARY`` transport remains ``DISABLE_PUSHDOWN``
+- geospatial EWKB transport remains ``DISABLE_PUSHDOWN``; spatial functions and
+  predicates involving geospatial values are evaluated locally
 
 This keeps remote filtering available where the connector can still bind the
 original logical type safely, while avoiding pushdown on carrier-only
@@ -309,7 +341,8 @@ match. Expressions with explicit time zone operands, such as ``AT TIME ZONE
   legacy remote padding when such casts are pushed down
 - Cross-cluster joins can only be improved with pushdown and statistics; the
   connector cannot remove the structural cost of federating between clusters
-- Cross-version compatibility is not yet claimed
+- Selected cross-version pairs are smoke-tested, but general cross-version
+  compatibility is not guaranteed
 
 ## Testing scope
 
@@ -327,3 +360,8 @@ smoke test for the production shape where a small federated Trino 482 cluster
 queries a separate Trino 482 cluster with a Delta Lake catalog. It reuses the
 ``target/trino-trino-482`` package produced by ``mvn -B clean verify`` and is
 documented in ``docs/remote-delta-smoke.md``.
+
+The separate ``testing/remote-version-smoke/run.sh`` probe covers selected
+different remote Trino versions. It checks native geospatial reads only when
+both Trino versions are at least 481; other cross-version checks do not imply
+native geospatial compatibility.

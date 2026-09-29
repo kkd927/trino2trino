@@ -14,10 +14,13 @@
 package io.trino.plugin.trino;
 
 import io.trino.Session;
+import io.trino.sql.planner.plan.FilterNode;
+import io.trino.sql.planner.plan.ProjectNode;
 import io.trino.sql.planner.plan.TopNNode;
 import io.trino.testing.MaterializedResult;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Locale;
 
 import static io.trino.spi.type.TimeZoneKey.getTimeZoneKey;
@@ -973,6 +976,48 @@ abstract class TestTrinoConnectorIntegration
         MaterializedResult result = computeActual(
                 "SELECT path FROM remote.default.test_delegation_log WHERE contains(ARRAY[BIGINT '1', BIGINT '3'], regionkey) ORDER BY path");
         assertThat(result.getOnlyColumnAsSet()).containsExactly("/post/100", "/post/200");
+    }
+
+    @Test
+    void testGeospatialPredicatesAndFunctionsStayLocal()
+    {
+        for (String delegationEnabled : List.of("true", "false")) {
+            Session session = Session.builder(getSession())
+                    .setCatalogSessionProperty("remote", "remote_delegation_enabled", delegationEnabled)
+                    .build();
+
+            assertThat(query(session, "SELECT id FROM remote.default.test_geospatial WHERE ST_SRID(g) = 4326"))
+                    .isNotFullyPushedDown(FilterNode.class)
+                    .matches("VALUES 1");
+            assertThat(query(session, "SELECT id FROM remote.default.test_geospatial WHERE g IS NULL"))
+                    .isNotFullyPushedDown(FilterNode.class)
+                    .matches("VALUES 4");
+            assertThat(query(
+                    session,
+                    "SELECT id FROM remote.default.test_geospatial WHERE g = ST_GeomFromBinary(X'0101000020E6100000000000000000F03F0000000000000040')"))
+                    .isNotFullyPushedDown(FilterNode.class)
+                    .matches("VALUES 1");
+            assertThat(query(session, "SELECT ST_AsText(g) FROM remote.default.test_geospatial WHERE id = 1"))
+                    .isNotFullyPushedDown(ProjectNode.class);
+            assertThat(computeActual(session, "SELECT ST_AsText(g) FROM remote.default.test_geospatial WHERE id = 1").getOnlyValue())
+                    .isEqualTo("POINT (1 2)");
+        }
+    }
+
+    @Test
+    void testGeospatialColumnsCanBeReadThroughOrdinaryLocalJoin()
+    {
+        Session localJoin = Session.builder(getSession())
+                .setCatalogSessionProperty("remote", "join_pushdown_enabled", "false")
+                .build();
+        assertThat(query(
+                localJoin,
+                "SELECT a.id, ST_AsText(a.g), ST_AsText(to_geometry(a.s)) " +
+                        "FROM remote.default.test_geospatial a " +
+                        "JOIN remote.default.test_geospatial b ON a.id = b.id " +
+                        "WHERE a.id = 1"))
+                .joinIsNotFullyPushedDown()
+                .matches("VALUES (1, CAST('POINT (1 2)' AS VARCHAR), CAST('POINT (1 2)' AS VARCHAR))");
     }
 
     @Test

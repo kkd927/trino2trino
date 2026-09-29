@@ -47,6 +47,7 @@ final class TrinoTypeClassifier
         NATIVE,
         VARCHAR_CAST,
         VARBINARY_CAST,
+        GEOSPATIAL_EWKB,
         JSON_CAST,
     }
 
@@ -158,6 +159,9 @@ final class TrinoTypeClassifier
 
     static TransportKind transportKind(Type type)
     {
+        if (GeospatialTransport.isGeospatialType(type)) {
+            return TransportKind.GEOSPATIAL_EWKB;
+        }
         if (requiresVarbinaryTransport(type)) {
             return TransportKind.VARBINARY_CAST;
         }
@@ -214,6 +218,9 @@ final class TrinoTypeClassifier
 
     private static boolean supportsStringSurrogateLeafType(Type type)
     {
+        if (GeospatialTransport.isGeospatialType(type)) {
+            return true;
+        }
         if (isCommonLeafType(type)) {
             return true;
         }

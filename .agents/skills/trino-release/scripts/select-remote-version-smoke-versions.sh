@@ -33,7 +33,7 @@ add_version() {
 
   [[ -n "${version}" ]] || return 0
   [[ "${version}" != "${target_version}" ]] || return 0
-  [[ "${selected_count}" -lt 2 ]] || return 0
+  [[ "${selected_count}" -lt 3 ]] || return 0
 
   for ((index = 0; index < selected_count; index++)); do
     [[ "${selected[index]}" != "${version}" ]] || return 0
@@ -95,6 +95,15 @@ fi
 
 if [[ "${selected_count}" -lt 2 ]]; then
   add_version "$(newest_not_target)"
+fi
+
+# Preserve the broad version samples above, then include a different remote
+# release with native EWKB geospatial support when one is available.
+if (( 10#${target_version} >= 481 )); then
+  geospatial_version="$(highest_less_than "${target_version}")"
+  if [[ -n "${geospatial_version}" ]] && (( 10#${geospatial_version} >= 481 )); then
+    add_version "${geospatial_version}"
+  fi
 fi
 
 if [[ "${selected_count}" -eq 0 ]]; then

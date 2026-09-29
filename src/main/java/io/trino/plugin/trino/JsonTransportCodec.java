@@ -199,6 +199,11 @@ final class JsonTransportCodec
             return;
         }
 
+        if (GeospatialTransport.isGeospatialType(type)) {
+            GeospatialTransport.writeHexToBlock(value, type, builder);
+            return;
+        }
+
         if (type instanceof ArrayType || type instanceof MapType || type instanceof RowType) {
             try {
                 writeJsonNodeToBlock(OBJECT_MAPPER.readTree(value), type, builder);

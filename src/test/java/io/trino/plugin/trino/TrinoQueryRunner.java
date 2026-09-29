@@ -28,7 +28,7 @@ import static java.util.stream.Collectors.joining;
 /**
  * Sets up two in-process Trino instances for testing the trino2trino connector:
  * <ul>
- *     <li><b>Remote</b>: Plain Trino with tpch + memory catalogs (acts as the remote data source)</li>
+ *     <li><b>Remote</b>: Plain Trino with geospatial, tpch, and memory plugins (acts as the remote data source)</li>
  *     <li><b>Local</b>: Trino with trino2trino plugin connecting to Remote</li>
  * </ul>
  */
@@ -115,6 +115,7 @@ public final class TrinoQueryRunner
                 .addExtraProperty("query.max-history", "1000")
                 .build();
         try {
+            remoteRunner.installPlugin(GeospatialTestPlugin.load());
             remoteRunner.installPlugin(new TpchPlugin());
             remoteRunner.createCatalog("tpch", "tpch");
             remoteRunner.installPlugin(new MemoryPlugin());
@@ -214,6 +215,7 @@ public final class TrinoQueryRunner
                     .addExtraProperty("retry-policy", "NONE")
                     .build();
             try {
+                localRunner.installPlugin(GeospatialTestPlugin.load());
                 localRunner.installPlugin(new TpchPlugin());
                 localRunner.createCatalog("tpch", "tpch");
 
@@ -661,6 +663,38 @@ public final class TrinoQueryRunner
         remoteRunner.execute(
                 memorySession,
                 "CREATE TABLE test_setdigest AS SELECT make_set_digest(v) AS x FROM (VALUES 1, 2, 3, 4, 5) t(v)");
+
+        // --- Geospatial EWKB transport (including SRID) ---
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_geospatial AS
+                SELECT * FROM (
+                    VALUES
+                        (1, ST_GeomFromBinary(X'0101000020E6100000000000000000F03F0000000000000040'), to_spherical_geography(ST_Point(1, 2))),
+                        (2, ST_GeometryFromText('MULTIPOINT ((1 2), (3 4))'), to_spherical_geography(ST_GeometryFromText('MULTIPOINT ((1 2), (3 4))'))),
+                        (3, ST_GeometryFromText('POINT EMPTY'), to_spherical_geography(ST_GeometryFromText('POINT EMPTY'))),
+                        (4, CAST(NULL AS Geometry), CAST(NULL AS SphericalGeography))
+                ) AS t(id, g, s)
+                """);
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_geospatial_nested AS
+                SELECT
+                    id,
+                    ARRAY[g, CAST(NULL AS Geometry)] AS geometry_array,
+                    MAP(ARRAY['point', 'missing'], ARRAY[g, CAST(NULL AS Geometry)]) AS geometry_map,
+                    MAP(ARRAY[g], ARRAY[s]) AS geometry_key_map,
+                    CAST(ROW(s, ARRAY[g, CAST(NULL AS Geometry)], MAP(ARRAY['sphere'], ARRAY[s])) AS
+                         ROW(sphere SphericalGeography, points ARRAY(Geometry), sphere_map MAP(VARCHAR, SphericalGeography))) AS payload
+                FROM test_geospatial WHERE id = 1
+                UNION ALL
+                SELECT
+                    2,
+                    CAST(NULL AS ARRAY(Geometry)),
+                    CAST(NULL AS MAP(VARCHAR, Geometry)),
+                    CAST(NULL AS MAP(Geometry, SphericalGeography)),
+                    CAST(NULL AS ROW(sphere SphericalGeography, points ARRAY(Geometry), sphere_map MAP(VARCHAR, SphericalGeography)))
+                """);
 
         // --- Nested unsupported complex types ---
         remoteRunner.execute(

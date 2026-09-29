@@ -43,6 +43,7 @@ import io.trino.spi.type.TypeManager;
 import io.trino.spi.type.UuidType;
 import io.trino.spi.type.VarcharType;
 
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
@@ -97,6 +98,10 @@ final class TrinoReadMappingFactory
         String normalizedTypeName = TrinoJdbcTypeHandleResolver.normalizedTypeName(typeName);
         Type logicalType = typeName.isEmpty() ? null : TrinoTypeNameParser.parseTypeName(typeName, typeManager);
         Optional<ColumnMapping> transportMapping = transportFallbackColumnMapping(logicalType);
+
+        if (logicalType != null && GeospatialTransport.isGeospatialType(logicalType)) {
+            return Optional.of(geospatialColumnMapping(logicalType));
+        }
 
         if ((logicalType != null && TrinoTypeClassifier.isNumberType(logicalType)) || normalizedTypeName.equals("number")) {
             return Optional.of(TrinoNumberCodec.numberColumnMapping());
@@ -325,6 +330,42 @@ final class TrinoReadMappingFactory
                     DISABLE_PUSHDOWN);
         }
         throw new TrinoException(NOT_SUPPORTED, "Unsupported VARBINARY transport type: " + logicalType);
+    }
+
+    private static ColumnMapping geospatialColumnMapping(Type logicalType)
+    {
+        return ColumnMapping.objectMapping(
+                logicalType,
+                new ObjectReadFunction()
+                {
+                    @Override
+                    public Class<?> getJavaType()
+                    {
+                        return logicalType.getJavaType();
+                    }
+
+                    @Override
+                    public Object readObject(ResultSet resultSet, int columnIndex)
+                            throws SQLException
+                    {
+                        return GeospatialTransport.readObject(resultSet.getBytes(columnIndex), logicalType);
+                    }
+                },
+                new ObjectWriteFunction()
+                {
+                    @Override
+                    public Class<?> getJavaType()
+                    {
+                        return logicalType.getJavaType();
+                    }
+
+                    @Override
+                    public void set(PreparedStatement statement, int index, Object value)
+                    {
+                        throw unsupportedWriteException();
+                    }
+                },
+                DISABLE_PUSHDOWN);
     }
 
     private Optional<ColumnMapping> toArrayMapping(ConnectorSession session, JdbcTypeHandle typeHandle, String typeName)
