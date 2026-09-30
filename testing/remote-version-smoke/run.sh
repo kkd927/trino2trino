@@ -225,6 +225,47 @@ run_version() (
   assert_marked_output_equals $'__local_remote_join_count__\t2' "__local_remote_join_count__" "TPCH local-to-remote join" "${tpch_output}"
   assert_marked_output_equals $'__passthrough__\t25' "__passthrough__" "TPCH passthrough query" "${tpch_output}"
 
+  echo "Running geospatial remote SQL passthrough assertions"
+  local geospatial_passthrough
+  geospatial_passthrough="$(trino_exec trino-local-version "
+    SELECT '__geospatial_passthrough__', wkt, spherical_wkt
+    FROM TABLE(remote_memory.system.query(query =>
+      'SELECT ST_AsText(ST_Point(1.0, 2.0)) AS wkt, ST_AsText(to_geometry(to_spherical_geography(ST_Point(1.0, 2.0)))) AS spherical_wkt'))
+  ")"
+  assert_output_equals $'__geospatial_passthrough__\tPOINT (1 2)\tPOINT (1 2)' "remote geospatial SQL passthrough" "${geospatial_passthrough}"
+
+  if (( 10#${local_version} >= 481 && 10#${remote_version} >= 481 )); then
+    echo "Running native geospatial EWKB transport assertions"
+    # Exercise the 2D EWKB format shared by 481+; SRID preservation is covered
+    # by the same-version integration tests.
+    local point_srid_ewkb="0101000020E6100000000000000000F03F0000000000000040"
+    trino_exec trino-remote-version "
+      DROP TABLE IF EXISTS memory.default.remote_version_geospatial_probe;
+      CREATE TABLE memory.default.remote_version_geospatial_probe AS
+      SELECT ST_GeomFromBinary(X'${point_srid_ewkb}') AS g,
+             to_spherical_geography(ST_Point(1.0, 2.0)) AS s,
+             ARRAY[ST_GeomFromBinary(X'${point_srid_ewkb}'), CAST(NULL AS Geometry)] AS ga
+    " >/dev/null
+
+    local geospatial_native
+    geospatial_native="$(trino_exec trino-local-version "
+      SELECT '__geospatial_native__', typeof(g), typeof(s), ST_SRID(g), ST_AsText(g),
+             ST_AsText(to_geometry(s)), ST_SRID(ga[1]), ga[2] IS NULL
+      FROM remote_memory.default.remote_version_geospatial_probe
+    ")"
+    assert_output_equals $'__geospatial_native__\tGeometry\tSphericalGeography\t4326\tPOINT (1 2)\tPOINT (1 2)\t4326\ttrue' "native and nested geospatial transport" "${geospatial_native}"
+
+    local geospatial_system_query
+    geospatial_system_query="$(trino_exec trino-local-version "
+      SELECT '__geospatial_system_query__', typeof(g), ST_SRID(g), ST_AsText(g)
+      FROM TABLE(remote_memory.system.query(query =>
+        'SELECT g FROM memory.default.remote_version_geospatial_probe'))
+    ")"
+    assert_output_equals $'__geospatial_system_query__\tGeometry\t4326\tPOINT (1 2)' "native geospatial system.query transport" "${geospatial_system_query}"
+  else
+    echo "Skipping native geospatial transport: EWKB support starts with Trino 481"
+  fi
+
   echo "Running timestamp with time zone transport assertions"
   local tstz_values_sql
   local tstz_expected

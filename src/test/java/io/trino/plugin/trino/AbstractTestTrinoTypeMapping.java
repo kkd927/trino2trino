@@ -1056,4 +1056,89 @@ abstract class AbstractTestTrinoTypeMapping
         assertThat(result.getMaterializedRows().get(0).getField(0)).isEqualTo("test");
         assertThat(result.getMaterializedRows().get(0).getField(1).toString()).contains("key");
     }
+
+    @Test
+    void testGeospatialNativeTypesAndEwkbRoundTrip()
+    {
+        MaterializedResult describe = computeActual("DESCRIBE remote.default.test_geospatial");
+        assertThat(describe.getMaterializedRows()).anySatisfy(row -> {
+            assertThat(row.getField(0)).isEqualTo("g");
+            assertThat(row.getField(1).toString()).isEqualToIgnoringCase("Geometry");
+        });
+        assertThat(describe.getMaterializedRows()).anySatisfy(row -> {
+            assertThat(row.getField(0)).isEqualTo("s");
+            assertThat(row.getField(1).toString()).isEqualToIgnoringCase("SphericalGeography");
+        });
+        assertQuery(
+                "SELECT typeof(g), typeof(s) FROM remote.default.test_geospatial WHERE id = 1",
+                "VALUES ('Geometry', 'SphericalGeography')");
+
+        String projected = "SELECT id, to_hex(ST_AsEWKB(g)), to_hex(ST_AsEWKB(to_geometry(s))) FROM remote.default.test_geospatial ORDER BY id";
+        String remote =
+                """
+                SELECT id, geometry_ewkb, sphere_ewkb
+                FROM TABLE(remote.system.query(query =>
+                    'SELECT id, to_hex(ST_AsEWKB(g)) AS geometry_ewkb, to_hex(ST_AsEWKB(to_geometry(s))) AS sphere_ewkb FROM memory.default.test_geospatial'))
+                ORDER BY id
+                """;
+        assertThat(computeActual(projected).getMaterializedRows())
+                .isEqualTo(computeActual(remote).getMaterializedRows());
+        assertQuery("SELECT ST_SRID(g) FROM remote.default.test_geospatial WHERE id = 1", "VALUES 4326");
+        assertQuery("SELECT ST_IsEmpty(g), ST_IsEmpty(to_geometry(s)) FROM remote.default.test_geospatial WHERE id = 3", "VALUES (true, true)");
+        assertQuery(
+                "SELECT ST_AsText(g), ST_AsText(to_geometry(s)) FROM remote.default.test_geospatial WHERE id = 2",
+                "VALUES ('MULTIPOINT ((1 2), (3 4))', 'MULTIPOINT ((1 2), (3 4))')");
+        assertQuery("SELECT g IS NULL, s IS NULL FROM remote.default.test_geospatial WHERE id = 4", "VALUES (true, true)");
+    }
+
+    @Test
+    void testNestedGeospatialTransport()
+    {
+        assertThat(computeActual(
+                "SELECT to_hex(ST_AsEWKB(geometry_array[1])), geometry_array[2] IS NULL, " +
+                        "to_hex(ST_AsEWKB(element_at(geometry_map, 'point'))), element_at(geometry_map, 'missing') IS NULL " +
+                        "FROM remote.default.test_geospatial_nested WHERE id = 1").getMaterializedRows())
+                .isEqualTo(computeActual(
+                        "SELECT to_hex(ST_AsEWKB(g)), true, to_hex(ST_AsEWKB(g)), true FROM remote.default.test_geospatial WHERE id = 1")
+                        .getMaterializedRows());
+        assertThat(computeActual(
+                "SELECT to_hex(ST_AsEWKB(k)), to_hex(ST_AsEWKB(to_geometry(v))) " +
+                        "FROM remote.default.test_geospatial_nested CROSS JOIN UNNEST(geometry_key_map) AS t(k, v) WHERE id = 1").getMaterializedRows())
+                .isEqualTo(computeActual(
+                        "SELECT to_hex(ST_AsEWKB(g)), to_hex(ST_AsEWKB(to_geometry(s))) FROM remote.default.test_geospatial WHERE id = 1")
+                        .getMaterializedRows());
+        assertThat(computeActual(
+                "SELECT to_hex(ST_AsEWKB(to_geometry(payload.sphere))), " +
+                        "to_hex(ST_AsEWKB(payload.points[1])), payload.points[2] IS NULL, " +
+                        "to_hex(ST_AsEWKB(to_geometry(element_at(payload.sphere_map, 'sphere')))) " +
+                        "FROM remote.default.test_geospatial_nested WHERE id = 1").getMaterializedRows())
+                .isEqualTo(computeActual(
+                        "SELECT to_hex(ST_AsEWKB(to_geometry(s))), to_hex(ST_AsEWKB(g)), true, " +
+                                "to_hex(ST_AsEWKB(to_geometry(s))) FROM remote.default.test_geospatial WHERE id = 1")
+                        .getMaterializedRows());
+        assertQuery(
+                "SELECT geometry_array IS NULL, geometry_map IS NULL, geometry_key_map IS NULL, payload IS NULL " +
+                        "FROM remote.default.test_geospatial_nested WHERE id = 2",
+                "VALUES (true, true, true, true)");
+    }
+
+    @Test
+    void testGeospatialSystemQueryNativeResults()
+    {
+        String table = "TABLE(remote.system.query(query => 'SELECT g, s FROM memory.default.test_geospatial WHERE id = 1'))";
+        assertQuery("SELECT typeof(g), typeof(s), ST_SRID(g), ST_AsText(to_geometry(s)) FROM " + table,
+                "VALUES ('Geometry', 'SphericalGeography', 4326, 'POINT (1 2)')");
+        assertQuery(
+                "SELECT g IS NULL, s IS NULL FROM TABLE(remote.system.query(query => " +
+                        "'SELECT g, s FROM memory.default.test_geospatial WHERE id = 4'))",
+                "VALUES (true, true)");
+
+        String nested = "TABLE(remote.system.query(query => 'SELECT geometry_array, geometry_key_map, payload FROM memory.default.test_geospatial_nested WHERE id = 1'))";
+        assertThat(computeActual("SELECT typeof(geometry_array), ST_SRID(geometry_array[1]), " +
+                "to_hex(ST_AsEWKB(k)), ST_AsText(to_geometry(v)) " +
+                "FROM " + nested + " CROSS JOIN UNNEST(geometry_key_map) AS t(k, v)").getMaterializedRows())
+                .isEqualTo(computeActual(
+                        "SELECT 'array(Geometry)', ST_SRID(g), to_hex(ST_AsEWKB(g)), ST_AsText(to_geometry(s)) " +
+                                "FROM remote.default.test_geospatial WHERE id = 1").getMaterializedRows());
+    }
 }

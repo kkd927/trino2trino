@@ -5,7 +5,7 @@ services:
     cpus: "${REMOTE_VERSION_SMOKE_CPU_LIMIT:-2.0}"
     entrypoint: ["/bin/bash", "/opt/trino-smoke/start-trino.sh"]
     environment:
-      SMOKE_PLUGINS: "memory,tpch"
+      SMOKE_PLUGINS: "geospatial,memory,tpch"
     volumes:
       - ./conf/common/config.properties:/etc/trino/config.properties:ro
       - ./start-trino.sh:/opt/trino-smoke/start-trino.sh:ro
@@ -17,7 +17,7 @@ services:
     cpus: "${REMOTE_VERSION_SMOKE_CPU_LIMIT:-2.0}"
     entrypoint: ["/bin/bash", "/opt/trino-smoke/start-trino.sh"]
     environment:
-      SMOKE_PLUGINS: "trino"
+      SMOKE_PLUGINS: "geospatial,trino"
     depends_on:
       - trino-remote-version
     volumes:

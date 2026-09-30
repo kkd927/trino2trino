@@ -86,6 +86,9 @@ final class JsonTransportHelper
 
     private String buildStringSurrogateExpression(String reference, Type type)
     {
+        if (GeospatialTransport.isGeospatialType(type)) {
+            return "to_hex(" + GeospatialTransport.ewkbExpression(reference, type) + ")";
+        }
         if (type instanceof TimestampWithTimeZoneType) {
             return TimestampWithTimeZoneTransport.readExpression(reference);
         }

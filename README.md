@@ -70,11 +70,11 @@ SELECT * FROM remote.schema.table LIMIT 10;
 |---------|-----------|-------|
 | `SELECT` | Yes | |
 | `JOIN` (cross-cluster) | Yes | |
-| Predicate pushdown | Partial | Native columns and typed VARCHAR-transport temporal/interval columns only; JSON/VARBINARY transport columns are excluded |
-| Projection pushdown | Yes | Trino-native expressions are delegated when the compatibility registry allows them |
+| Predicate pushdown | Partial | Native columns and typed VARCHAR-transport temporal/interval columns only; JSON/VARBINARY/geospatial transport columns are excluded |
+| Projection pushdown | Partial | Trino-native expressions are delegated when the compatibility registry allows them; geospatial expressions remain local |
 | Aggregation pushdown | Partial | `count`, `count distinct`, `count_if`, `checksum`, `min/max`, `sum`, `avg` are pushed down for supported types; `stddev`, `variance`, `covariance`, `correlation`, `regression` are not |
 | `LIMIT` / `ORDER BY ... LIMIT` | Yes | Remote TopN reduces transferred rows; local TopN verifies ordering because transport projection can wrap the remote query |
-| Same-remote join pushdown | Partial | All comparison operators are supported, including `IS NOT DISTINCT FROM` and varchar inequalities; joins stay local when the cost-based strategy declines or a constant join condition is not an exact numeric or varchar |
+| Same-remote join pushdown | Partial | Supported comparison operators include `IS NOT DISTINCT FROM` and varchar inequalities; geospatial keys are excluded, and joins stay local when the cost-based strategy declines or a constant join condition is not an exact numeric or varchar |
 | `TABLE(system.query(...))` passthrough | Yes | Top-level query statements only; remote access control is the security boundary |
 | Table statistics (`SHOW STATS`) | Yes | Uses remote `SHOW STATS FOR <table>` |
 | `INSERT` / `UPDATE` / `DELETE` / `MERGE` | No | Read-only connector |
@@ -84,17 +84,37 @@ SELECT * FROM remote.schema.table LIMIT 10;
 
 ## Type Support
 
-The connector uses five transport modes to maximize type coverage:
+The connector uses six transport modes to maximize type coverage:
 
 | Transport Mode | Strategy | Examples |
 |---------------|----------|----------|
 | **NATIVE** | JDBC reads the type exactly | `boolean`, `bigint`, `number`, `varchar`, `date`, `uuid`, `array(varchar)`, `map(varchar, bigint)`, `row(id uuid, data json)` |
 | **VARCHAR transport** | Lossless string projection → decode back | `timestamp(p) with time zone`, `time with time zone`, intervals, high-precision `timestamp(p>9)` |
 | **VARBINARY transport** | Project as `VARBINARY` → decode back | `HyperLogLog`, `P4HyperLogLog`, `qdigest(T)`, `setdigest`, `tdigest` |
+| **Geospatial EWKB transport** | Project EWKB bytes → restore native type | `Geometry`, `SphericalGeography` |
 | **JSON transport** | Recursive JSON rewrite → decode back | `array(timestamp(3))`, `array(timestamp(12))`, `array(time(3))`, `array(date)`, `map(varchar, interval day to second)`, structural columns whose non-native descendants can be represented safely through JSON transport |
 | **UNSUPPORTED** | Fallback (`IGNORE` or `CONVERT_TO_VARCHAR`) | Opaque or connector-specific types without a safe transport rule |
 
 See the [connector reference](docs/src/main/sphinx/connector/trino.md) for detailed type transport rules.
+
+Native geospatial reads require `ST_AsEWKB` on the remote Trino instance
+(available from Trino 481) and an EWKB-backed geospatial type on the local
+instance. This Trino 481 source line supports native `Geometry` and
+`SphericalGeography` reads from remote Trino 481 and newer.
+Remote Trino 480 and older are not supported for native geospatial reads.
+There is no automatic VARCHAR fallback for these remote versions.
+
+With Trino 481 on both sides, geospatial reads also work inside `ARRAY`,
+`MAP`, and `ROW` values, including map keys. `Geometry` SRIDs, empty and multi
+geometries, and NULLs are preserved in the 481-to-481 tests. Cross-version
+smoke tests cover 2D values with SRID. Trino 481 itself does not preserve Z
+coordinates; 3D geospatial support was added in Trino 483. Spatial functions
+on connector columns execute locally; geospatial predicate and function
+pushdown and writes are not supported. Explicit SQL
+inside `system.query` still executes on the remote Trino instance. Some local
+`Geometry` equality joins may fail with dynamic filtering; normal
+reads, local spatial functions, and joins on ordinary keys do not require
+disabling dynamic filtering.
 
 ## Pushdown & Statistics
 
@@ -167,7 +187,9 @@ FROM TABLE(
 - Remote delegation probes `CHAR` to `VARCHAR` cast semantics and delegates
   these casts only when the remote retains the padding expected by Trino 481.
 - Cross-cluster joins can only be improved with pushdown and statistics; the connector cannot remove the structural cost of federating between clusters
-- Tested against Trino 481 querying remote Trino 481; cross-version compatibility is not claimed yet
+- Full integration coverage uses Trino 481 querying remote Trino 481; bounded
+  cross-version smoke tests cover selected remote versions, not a general
+  cross-version compatibility guarantee
 
 ## Contributing
 

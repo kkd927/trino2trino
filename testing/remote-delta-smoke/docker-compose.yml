@@ -1,33 +1,23 @@
 services:
-  minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
-    command: server /data --address ":9000" --console-address ":9001"
+  s3mock:
+    image: adobe/s3mock:5.2.2
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: remote-delta-smoke
     ports:
-      - "19000:9000"
-      - "19001:9001"
-
-  minio-init:
-    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
-    depends_on:
-      - minio
-    entrypoint: ["/bin/sh", "-c"]
-    command: >
-      'until mc alias set local http://minio:9000 minioadmin minioadmin; do
-        echo "waiting for MinIO";
-        sleep 2;
-      done;
-      mc mb --ignore-existing local/remote-delta-smoke'
+      - "19000:9090"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/favicon.ico"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
 
   hive-metastore:
     build:
       context: ./hive-metastore
     image: trino2trino-remote-delta-smoke-hive:4.0.1
     depends_on:
-      minio-init:
-        condition: service_completed_successfully
+      s3mock:
+        condition: service_healthy
     environment:
       SERVICE_NAME: metastore
       DB_DRIVER: derby
@@ -37,9 +27,9 @@ services:
         -Dhive.metastore.warehouse.dir=file:///tmp/hive/warehouse
         -Dfs.s3.impl=org.apache.hadoop.fs.s3a.S3AFileSystem
         -Dfs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem
-        -Dfs.s3a.endpoint=http://minio:9000
-        -Dfs.s3a.access.key=minioadmin
-        -Dfs.s3a.secret.key=minioadmin
+        -Dfs.s3a.endpoint=http://s3mock:9090
+        -Dfs.s3a.access.key=test
+        -Dfs.s3a.secret.key=test
         -Dfs.s3a.path.style.access=true
         -Dfs.s3a.connection.ssl.enabled=false
     volumes:
@@ -52,8 +42,8 @@ services:
     depends_on:
       hive-metastore:
         condition: service_started
-      minio-init:
-        condition: service_completed_successfully
+      s3mock:
+        condition: service_healthy
     volumes:
       - ./conf/remote/catalog:/etc/trino/catalog:ro
       - ./sql:/remote-delta-smoke/sql:ro

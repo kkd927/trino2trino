@@ -279,6 +279,9 @@ public class TrinoClient
     @Override
     public Optional<ParameterizedExpression> convertPredicate(ConnectorSession session, ConnectorExpression expression, Map<String, ColumnHandle> assignments)
     {
+        if (referencesGeospatialType(expression)) {
+            return Optional.empty();
+        }
         return delegationAnalyzer.analyzePredicate(session, expression, assignments, getRemoteCapabilities(session))
                 .or(() -> connectorExpressionRewriter.rewrite(session, expression, assignments));
     }
@@ -286,15 +289,27 @@ public class TrinoClient
     @Override
     public Optional<JdbcExpression> convertProjection(ConnectorSession session, JdbcTableHandle handle, ConnectorExpression expression, Map<String, ColumnHandle> assignments)
     {
-        if (!handle.getUpdateAssignments().isEmpty() || assignments.values().stream().anyMatch(TrinoClient::isHiddenJdbcColumn)) {
+        if (referencesGeospatialType(expression) || !handle.getUpdateAssignments().isEmpty() || assignments.values().stream().anyMatch(TrinoClient::isHiddenJdbcColumn)) {
             return Optional.empty();
         }
         return delegationAnalyzer.analyzeProjection(session, expression, assignments, getRemoteCapabilities(session));
     }
 
+    private static boolean referencesGeospatialType(ConnectorExpression expression)
+    {
+        if (GeospatialTransport.containsGeospatialType(expression.getType())) {
+            return true;
+        }
+        return expression.getChildren().stream().anyMatch(TrinoClient::referencesGeospatialType);
+    }
+
     @Override
     protected boolean isSupportedJoinCondition(ConnectorSession session, JdbcJoinCondition joinCondition)
     {
+        if (GeospatialTransport.containsGeospatialType(joinCondition.getLeftColumn().getColumnType()) ||
+                GeospatialTransport.containsGeospatialType(joinCondition.getRightColumn().getColumnType())) {
+            return false;
+        }
         // This only declares operator support for the base JDBC join implementation.
         // Planner-side coercions and rendered join conditions determine whether any
         // compatibility-sensitive casts are present.
@@ -624,6 +639,7 @@ public class TrinoClient
                         ? TimestampWithTimeZoneTransport.readExpression(reference)
                         : "CAST(" + reference + " AS VARCHAR)") + " AS " + alias;
                 case VARBINARY_CAST -> "CAST(" + reference + " AS VARBINARY) AS " + alias;
+                case GEOSPATIAL_EWKB -> GeospatialTransport.ewkbExpression(reference, logicalType) + " AS " + alias;
                 case JSON_CAST -> "json_format(CAST(" + jsonTransportHelper.buildJsonTransportExpression(reference, logicalType) + " AS JSON)) AS " + alias;
             });
         }

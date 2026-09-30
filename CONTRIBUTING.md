@@ -30,12 +30,20 @@ Additional Maven options are passed through. This wrapper is only for local
 iteration; run `mvn -B clean verify` before submitting a change. Override the
 heap when needed with `TRINO_FAST_TEST_JVM_SIZE`.
 
+The geospatial integration tests for this Trino 481 source line load the matching
+official geospatial plugin ZIP from the Trino GitHub release, caching it under
+`target/`. For offline runs, set `TRINO_GEOSPATIAL_PLUGIN_ZIP` to a previously
+downloaded `trino-geospatial-481.zip` file. When backporting to another local
+Trino version, update the test plugin ZIP and version-specific spatial tests
+before running the full suite.
+
 ## Test Suites
 
 | Test class | Coverage |
 |------------|----------|
 | `TestTrinoTypeParser` | Type name parsing |
 | `TestTrinoConnectorTest` | Base JDBC contract, integration, type mapping, and unsupported-type fallback |
+| `TestGeospatialTransport` | EWKB transport classification, nested decoding, and malformed payload rejection |
 
 ## Local Docker Environment
 
@@ -70,10 +78,14 @@ mvn -B clean verify
 testing/remote-delta-smoke/run.sh
 ```
 
-This starts local and remote Trino containers, MinIO, and Hive Metastore for
+This starts local and remote Trino containers, Adobe S3Mock, and Hive Metastore for
 the remote Delta smoke test.
 Failure diagnostics are written to `target/remote-delta-smoke/`. See
 `docs/remote-delta-smoke.md` for details.
+
+The separate [remote version smoke test](testing/remote-version-smoke/README.md)
+checks selected different Trino versions, including native geospatial reads
+when both versions support EWKB transport.
 
 ## Documentation
 

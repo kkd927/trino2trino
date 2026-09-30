@@ -205,8 +205,14 @@ class TestTrinoTypeParser
     @Test
     void testUnknownTypeReturnsNull()
     {
-        assertThat(parse("geometry")).isNull();
         assertThat(parse("not_a_real_type")).isNull();
+    }
+
+    @Test
+    void testGeospatialTypesWithoutRegisteredPluginReturnNull()
+    {
+        assertThat(parse("Geometry")).isNull();
+        assertThat(parse("SphericalGeography")).isNull();
     }
 
     @Test
