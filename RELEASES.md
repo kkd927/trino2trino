@@ -13,7 +13,7 @@ the release that matches your Trino version.
 |---------------|----------------------------|------------|
 | 483 | [trino-483-r2](https://github.com/kkd927/trino2trino/releases/tag/trino-483-r2) | `trino-trino-483.zip` |
 | 482 | [trino-482-r3](https://github.com/kkd927/trino2trino/releases/tag/trino-482-r3) | `trino-trino-482.zip` |
-| 481 | [trino-481-r2](https://github.com/kkd927/trino2trino/releases/tag/trino-481-r2) | `trino-trino-481.zip` |
+| 481 | [trino-481-r3](https://github.com/kkd927/trino2trino/releases/tag/trino-481-r3) | `trino-trino-481.zip` |
 | 480 | [trino-480-r2](https://github.com/kkd927/trino2trino/releases/tag/trino-480-r2) | `trino-trino-480.zip` |
 | 479 | [trino-479-r4](https://github.com/kkd927/trino2trino/releases/tag/trino-479-r4) | `trino-trino-479.zip` |
 | 477 | [trino-477-r5](https://github.com/kkd927/trino2trino/releases/tag/trino-477-r5) | `trino-trino-477.zip` |
