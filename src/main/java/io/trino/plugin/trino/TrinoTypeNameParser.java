@@ -22,12 +22,22 @@ import io.trino.spi.type.TypeManager;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 final class TrinoTypeNameParser
 {
     private static final Logger log = Logger.get(TrinoTypeNameParser.class);
 
+    // Trino 484 and later always report interval precision, including for columns
+    // declared without one, so only earlier servers report these spellings.
+    private static final Pattern LEGACY_INTERVAL_TYPE_NAME = Pattern.compile("interval (?:day to second|year to month)(?!\\s*\\()", Pattern.CASE_INSENSITIVE);
+
     private TrinoTypeNameParser() {}
+
+    static boolean containsLegacyIntervalTypeName(String typeName)
+    {
+        return LEGACY_INTERVAL_TYPE_NAME.matcher(typeName).find();
+    }
 
     static Type parseTypeName(String name, TypeManager typeManager)
     {
@@ -56,7 +66,11 @@ final class TrinoTypeNameParser
         }
 
         try {
-            return typeManager.fromSqlType(trimmedName);
+            // Pre-484 servers report intervals without precision. Read those spellings the
+            // way the engine reads stored legacy metadata, as interval day(9) to second(3)
+            // and interval year(9) to month, instead of applying the SQL declaration
+            // defaults, whose leading precision of 2 cannot hold legacy values.
+            return typeManager.fromPersistedSqlType(trimmedName);
         }
         catch (Exception e) {
             log.debug(e, "Unable to resolve type name: %s", trimmedName);

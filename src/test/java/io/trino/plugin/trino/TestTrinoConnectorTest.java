@@ -14,6 +14,7 @@
 package io.trino.plugin.trino;
 
 import io.trino.Session;
+import io.trino.sql.planner.plan.FilterNode;
 import io.trino.testing.DistributedQueryRunner;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.QueryRunner;
@@ -22,6 +23,9 @@ import io.trino.testing.sql.SqlExecutor;
 import io.trino.testing.sql.TestTable;
 import org.junit.jupiter.api.Test;
 
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.util.List;
 
 import static io.trino.testing.TestingNames.randomNameSuffix;
@@ -133,6 +137,18 @@ class TestTrinoConnectorTest
                         ('early', CAST(TIME '10:30:45.123 +09:00' AS TIME(3) WITH TIME ZONE)),
                         ('late', CAST(TIME '10:30:45.124 +09:00' AS TIME(3) WITH TIME ZONE))
                 ) AS t(id, time_tz_col)
+                """);
+        remoteRunner.execute(remoteSession,
+                """
+                CREATE TABLE test_in_list_pushdown AS
+                SELECT * FROM (
+                    VALUES
+                        (1, TIMESTAMP '1970-01-01 09:00:00.000 Asia/Seoul', TIME '15:00:00.000 +00:00', REAL '-0.0'),
+                        (2, TIMESTAMP '1970-01-01 00:00:05.000 UTC', TIME '00:00:00.000 +00:00', REAL '1.5'),
+                        (3, TIMESTAMP '1970-01-01 00:00:00.001 UTC', TIME '00:00:00.001 +00:00', REAL '1.4E-45'),
+                        (4, TIMESTAMP '2026-01-01 09:00:00.000 Asia/Seoul', TIME '09:00:00.000 +09:00', REAL '2.5'),
+                        (5, NULL, NULL, NULL)
+                ) AS t(id, ts, t, r)
                 """);
     }
 
@@ -260,6 +276,142 @@ class TestTrinoConnectorTest
     // =========================================================================
     // Architectural overrides -- federation SQL/format differences
     // =========================================================================
+
+    @Test
+    void testRemoteServerOfTheLocalVersionReceivesTheFullList()
+            throws SQLException
+    {
+        // The settings probe reads behavior that a later release can change. Its expected
+        // results must change with it. Otherwise a remote server of the local version with
+        // default settings receives only the basic list.
+        String localVersion = (String) computeScalar("SELECT version()");
+        String url = "jdbc:trino://localhost:" + remoteRunner.getCoordinator().getBaseUrl().getPort();
+        try (Connection connection = DriverManager.getConnection(url, "test", null)) {
+            TrinoRemoteCapabilities capabilities = TrinoRemoteCapabilities.load(connection, localVersion);
+
+            assertThat(capabilities.sameVersionAsLocal()).isTrue();
+            // A server with default settings must pass every value of the settings probe.
+            // Otherwise it receives only the basic list.
+            assertThat(capabilities.otherEvaluationSettings()).isEmpty();
+            assertThat(capabilities.evaluatesAsLocal()).isTrue();
+            assertThat(TrinoRemoteCapabilities.load(connection, localVersion + "-patch").sameVersionAsLocal()).isFalse();
+
+            // The connector tells a restarted remote server by the end of the query
+            // identifier, which stays the same while the remote coordinator runs
+            TrinoRemoteCapabilities.Probe probe = TrinoRemoteCapabilities.Probe.read(connection);
+            String remoteQueryId = (String) remoteRunner.execute("SELECT query_id FROM system.runtime.queries LIMIT 1").getOnlyValue();
+            assertThat(probe.serverProcess()).contains(remoteQueryId.substring(remoteQueryId.lastIndexOf('_') + 1));
+            assertThat(probe.isSameServer(TrinoRemoteCapabilities.Probe.read(connection))).isTrue();
+        }
+    }
+
+    @Test
+    void testDecimalArithmeticOfTheLocalRulesIsPushedDown()
+    {
+        // The connector keeps decimal arithmetic local when its result type does not follow
+        // the rules of the local release, which it repeats. If a release changes the rules,
+        // these filters stay local until the connector follows.
+        try (TestTable table = new TestTable(
+                onRemoteDatabase(),
+                "test_decimal_arithmetic",
+                "(id integer, one decimal(3,2), three decimal(3,2), big1 decimal(38,30), big2 decimal(38,0))",
+                List.of("1, DECIMAL '1.00', DECIMAL '3.00', CAST('1.5' AS decimal(38,30)), CAST('2' AS decimal(38,0))"))) {
+            assertThat(query("SELECT id FROM " + table.getName() + " WHERE one / three = DECIMAL '0.333333'"))
+                    .isFullyPushedDown()
+                    .matches("VALUES 1");
+            assertThat(query("SELECT id FROM " + table.getName() + " WHERE one * three = DECIMAL '3.0000'"))
+                    .isFullyPushedDown()
+                    .matches("VALUES 1");
+            assertThat(query("SELECT id FROM " + table.getName() + " WHERE big1 * big2 = DECIMAL '3.000000'"))
+                    .isFullyPushedDown()
+                    .matches("VALUES 1");
+            assertThat(query("SELECT id FROM " + table.getName() + " WHERE big1 + big2 > big2"))
+                    .isFullyPushedDown()
+                    .matches("VALUES 1");
+            assertThat(query("SELECT id FROM " + table.getName() + " WHERE big2 - big1 < big2"))
+                    .isFullyPushedDown()
+                    .matches("VALUES 1");
+        }
+    }
+
+    @Test
+    void testFiltersThatNaNPassesRunLocally()
+    {
+        try (TestTable table = new TestTable(
+                onRemoteDatabase(),
+                "test_nan_filter",
+                "AS SELECT * FROM (VALUES " +
+                        "(1, 5e0, REAL '5', NUMBER '5'), " +
+                        "(2, nan(), CAST(nan() AS real), CAST(nan() AS number)), " +
+                        "(3, 1e0, REAL '1', NUMBER '1')) AS t(id, d, r, n)")) {
+            // The base JDBC query builder renders these filters as NOT (x = ?) and
+            // NOT (x IN (?, ?)), which the row with NaN passes
+            for (String filter : List.of(
+                    "d < 1 OR d > 1",
+                    "r < REAL '1' OR r > REAL '1'",
+                    "n < NUMBER '1' OR n > NUMBER '1'",
+                    "d < 1 OR (d > 1 AND d < 7) OR d > 7")) {
+                assertThat(query("SELECT id FROM " + table.getName() + " WHERE " + filter))
+                        .describedAs(filter)
+                        .isNotFullyPushedDown(FilterNode.class)
+                        .matches("VALUES 1");
+            }
+            // Ranges whose complement is a range stay on the remote server
+            assertThat(query("SELECT id FROM " + table.getName() + " WHERE d < 1 OR d > 2"))
+                    .isFullyPushedDown()
+                    .matches("VALUES 1");
+            // NaN passes <>, which the engine keeps out of a domain
+            assertThat(query("SELECT id FROM " + table.getName() + " WHERE d <> 1"))
+                    .matches("VALUES 1, 2");
+        }
+    }
+
+    @Test
+    void testOperationsThatCompareJsonValuesRunLocally()
+    {
+        // A JSON value of Trino 484 can hold a date, which the remote server sends as a JSON
+        // string. The remote server tells row 1 from row 2, and the local server cannot, so
+        // an operation that compares JSON values must not depend on where it runs.
+        try (TestTable table = new TestTable(
+                onRemoteDatabase(),
+                "test_json_datetime",
+                "(id integer, j json, k json)",
+                List.of(
+                        "1, json_scalar(DATE '1970-01-01'), json_scalar(VARCHAR '1970-01-01')",
+                        "2, json_scalar(VARCHAR '1970-01-01'), json_scalar(VARCHAR '1970-01-01')",
+                        "3, JSON '\"x\"', JSON '\"x\"'"))) {
+            String name = table.getName();
+            assertThat(remoteRunner.execute(remoteMemorySession(), "SELECT count(DISTINCT j) FROM " + name).getOnlyValue()).isEqualTo(3L);
+
+            for (String sql : List.of(
+                    "SELECT count(DISTINCT j) FROM " + name,
+                    "SELECT count(*) FROM (SELECT DISTINCT j FROM " + name + ")",
+                    "SELECT count(*) FROM (SELECT j FROM " + name + " GROUP BY j)")) {
+                assertThat(computeScalar(sql)).describedAs(sql).isEqualTo(2L);
+                assertThat((String) computeScalar("EXPLAIN " + sql)).describedAs(sql).contains("Aggregate");
+            }
+            assertThat(query("SELECT checksum(j) = checksum(k) FROM " + name)).matches("VALUES true");
+            assertThat((String) computeScalar("EXPLAIN SELECT checksum(j) FROM " + name)).contains("Aggregate");
+
+            for (String filter : List.of("j = k", "NOT (j <> k)", "j IS NOT DISTINCT FROM k", "j IN (k)", "NULLIF(j, k) IS NULL", "contains(ARRAY[j], k)")) {
+                assertThat(query("SELECT id FROM " + name + " WHERE " + filter))
+                        .describedAs(filter)
+                        .isNotFullyPushedDown(FilterNode.class)
+                        .matches("VALUES 1, 2, 3");
+            }
+
+            // Operations that read a JSON value as text stay on the remote server
+            assertThat(query("SELECT id FROM " + name + " WHERE json_extract_scalar(j, '$') = '1970-01-01'"))
+                    .isFullyPushedDown()
+                    .matches("VALUES 1, 2");
+            assertThat(query("SELECT id FROM " + name + " WHERE json_format(j) = json_format(k)"))
+                    .isFullyPushedDown()
+                    .matches("VALUES 1, 2, 3");
+            assertThat(query("SELECT count(j) FROM " + name))
+                    .isFullyPushedDown()
+                    .matches("VALUES BIGINT '3'");
+        }
+    }
 
     @Test
     @Override
@@ -404,6 +556,10 @@ class TestTrinoConnectorTest
     @Test
     void testIntervalPredicatePushdown()
     {
+        // The pushdown decision follows the remote column type name, so it does not
+        // depend on the in-process server's unparseable version string. The container
+        // smoke verifies that legacy interval names from pre-484 servers stay local.
+        assertThat(computeRemoteActual("SELECT version()").getOnlyValue()).isEqualTo("testversion");
         assertThat(query("SELECT id FROM test_interval_filter_pushdown WHERE duration > INTERVAL '1' DAY"))
                 .isFullyPushedDown()
                 .matches("VALUES CAST('long' AS VARCHAR(5))");
@@ -426,6 +582,33 @@ class TestTrinoConnectorTest
         assertThat(query("SELECT id FROM test_timetz_filter_pushdown WHERE time_tz_col > TIME '10:30:45.123 +09:00'"))
                 .isFullyPushedDown()
                 .matches("VALUES CAST('late' AS VARCHAR(5))");
+    }
+
+    @Test
+    void testInListPredicatePushdown()
+    {
+        // Trino 484 compares the values of an IN list with the equality of the type, so
+        // equal instants with other time zones and zeros of both signs match
+        assertThat(query("SELECT id FROM test_in_list_pushdown WHERE ts IN (TIMESTAMP '1970-01-01 00:00:00 UTC', TIMESTAMP '1970-01-01 00:00:05 UTC')"))
+                .isFullyPushedDown()
+                .matches("VALUES 1, 2");
+        assertThat(query("SELECT id FROM test_in_list_pushdown WHERE ts IN (TIMESTAMP '1970-01-01 00:00:00 UTC', TIMESTAMP '1970-01-01 00:00:05 UTC', TIMESTAMP '2026-01-01 00:00:00 UTC')"))
+                .isFullyPushedDown()
+                .matches("VALUES 1, 2, 4");
+        assertThat(query("SELECT id FROM test_in_list_pushdown WHERE ts NOT IN (TIMESTAMP '1970-01-01 00:00:00 UTC', TIMESTAMP '1970-01-01 00:00:05 UTC')"))
+                .isFullyPushedDown()
+                .matches("VALUES 3, 4");
+        assertThat(query("SELECT id FROM test_in_list_pushdown WHERE t IN (TIME '00:00:00.000 +09:00', TIME '00:00:00.000 +00:00')"))
+                .isFullyPushedDown()
+                .matches("VALUES 1, 2, 4");
+        assertThat(query("SELECT id FROM test_in_list_pushdown WHERE t NOT IN (TIME '00:00:00.000 +09:00', TIME '00:00:00.000 +00:00')"))
+                .isFullyPushedDown()
+                .matches("VALUES 3");
+        assertThat(query("SELECT id FROM test_in_list_pushdown WHERE r IN (REAL '0.0', REAL '1.5')"))
+                .isFullyPushedDown()
+                .matches("VALUES 1, 2");
+        assertThat(query("SELECT p.id FROM test_in_list_pushdown p JOIN (VALUES TIMESTAMP '1970-01-01 00:00:00 UTC', TIMESTAMP '1970-01-01 00:00:05 UTC') v(ts) ON p.ts = v.ts"))
+                .matches("VALUES 1, 2");
     }
 
     @Test

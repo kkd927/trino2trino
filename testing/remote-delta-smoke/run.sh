@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 compose_file="${repo_root}/testing/remote-delta-smoke/docker-compose.yml"
 project_name="${REMOTE_DELTA_SMOKE_PROJECT_NAME:-trino2trino-remote-delta-smoke}"
-plugin_dir="${repo_root}/target/trino-trino-483"
+plugin_dir="${repo_root}/target/trino-trino-484"
 log_dir="${REMOTE_DELTA_SMOKE_LOG_DIR:-${repo_root}/target/remote-delta-smoke}"
 compose_touched=false
 
@@ -44,8 +44,14 @@ finish() {
   exit "${exit_code}"
 }
 
+if [[ -f "${plugin_dir}.zip" ]]; then
+  echo "Preparing smoke-test plugin from ${plugin_dir}.zip"
+  rm -rf "${plugin_dir}"
+  unzip -q "${plugin_dir}.zip" -d "${repo_root}/target"
+fi
+
 if [[ ! -d "${plugin_dir}" ]]; then
-  echo "Missing ${plugin_dir}. Build the plugin first:"
+  echo "Missing ${plugin_dir}.zip or ${plugin_dir}. Build the plugin first:"
   echo "  mvn -B clean verify"
   exit 1
 fi

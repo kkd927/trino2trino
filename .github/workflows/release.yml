@@ -58,6 +58,15 @@ jobs:
       - name: Run remote Delta smoke
         run: testing/remote-delta-smoke/run.sh
 
+      - name: Run same-version type compatibility smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          trino_version="$(grep -A 3 '<parent>' pom.xml | grep '<version>' | head -n 1 | sed -E 's/.*<version>([^<]+)<.*/\1/')"
+          # The second run uses a remote server of the same release with the settings that
+          # change evaluation, which must receive only the basic list
+          testing/remote-version-smoke/run.sh "${trino_version}" "${trino_version}-legacy-settings"
+
       - name: Select remote version smoke versions
         id: remote_version_smoke
         shell: bash
@@ -149,17 +158,29 @@ jobs:
           github_host="${GITHUB_SERVER_URL#https://}"
           github_host="${github_host#http://}"
 
-          cat > RELEASE_NOTES.md <<EOF
-          Automated release for ${tag}.
+          # Changes that users of the previous release see, written by hand for
+          # this tag
+          changes_file=".github/release-notes/${tag}.md"
 
+          {
+            echo "Automated release for ${tag}."
+            echo
+            if [[ -f "${changes_file}" ]]; then
+              cat "${changes_file}"
+              echo
+            fi
+          } > RELEASE_NOTES.md
+
+          cat >> RELEASE_NOTES.md <<EOF
           Assets:
           - \`$(basename "${{ steps.assets.outputs.plugin_zip }}")\`: installable Trino plugin bundle
           - \`$(basename "${{ steps.assets.outputs.sha_file }}")\`: SHA-256 checksums
 
           Install:
           1. Download the ZIP asset.
-          2. Extract it into your Trino \`plugin/trino/\` directory.
-          3. Add a catalog properties file and restart Trino.
+          2. If a previous release of the connector is installed, delete its plugin directory, such as \`plugin/trino-trino-<previous version>\`. Trino fails to start when two plugin directories contain the connector.
+          3. Extract the ZIP into the Trino \`plugin/\` directory itself, for example \`unzip $(basename "${{ steps.assets.outputs.plugin_zip }}") -d /usr/lib/trino/plugin/\`. The archive contains its own plugin directory, so do not extract it into a subdirectory such as \`plugin/trino/\`.
+          4. Add a catalog properties file and restart Trino.
           EOF
 
           if gh release view "${tag}" >/dev/null 2>&1; then

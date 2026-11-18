@@ -1,0 +1,56 @@
+# Types of the basic list: the operations that the connector pushes down to a remote
+# server of any version. run.sh compares every operation on each type with the result
+# of the local server, on each remote version that it runs.
+#
+# name | type | operations | values
+#
+# Every type gets <>, IS NULL, OR, count, count_if, count(DISTINCT), checksum, and
+# GROUP BY. The operations column adds:
+#   equal  =, IS [NOT] DISTINCT FROM, and NOT over them. A join on them makes the
+#          remote server build a dynamic filter. Servers before 484 compare a list of
+#          2 to 7 real values or values with a time zone by their raw form, and
+#          servers before 482 fail to order arrays and rows with a null element.
+#   filter the connector pushes down column filters on the type. run.sh compares one
+#          column with a constant by =, <, and, with in, IN. The engine also derives
+#          column filters from NOT over a comparison and from NOT IN with a constant.
+#   const  comparisons with a constant inside an expression. The connector cannot
+#          send uuid and ipaddress constants in an expression.
+#   order  ordering comparisons, min, max, ORDER BY ... LIMIT, and, with join, a join
+#          on an equality and an ordering comparison
+#   in     IN with columns and with constants, which needs equal and const
+#   sum    sum. The engine casts tinyint, smallint, and integer values to bigint for
+#          sum and avg, and casts are not in the basic list.
+#   avg    avg
+#   join   an inner, a left, and a right equality join, which need equal
+# The values are cast to the type. The table holds every pair of them, and of NULL.
+# TestTrinoCompatibilityRegistry requires this list to match the basic list of
+# TrinoCompatibilityRegistry.
+boolean|boolean|equal,filter,const,order,in,join|true; false
+tinyint|tinyint|equal,filter,const,order,in,join|-128; -1; 0; 127
+smallint|smallint|equal,filter,const,order,in,join|-32768; -1; 0; 32767
+integer|integer|equal,filter,const,order,in,join|-2147483648; -1; 0; 2147483647
+bigint|bigint|equal,filter,const,order,in,sum,avg,join|-1000000000000000000; -1; 0; 1000000000000000000
+real|real|filter,const,order|REAL '-Infinity'; REAL '-1.5'; REAL '-0.0'; REAL '0.0'; REAL '1.5'; REAL 'NaN'
+real_finite|real|filter,const,order,sum,avg|REAL '-2.5'; REAL '0.25'; REAL '1.5'; REAL '1024.0'
+double|double|equal,filter,const,order,in,join|DOUBLE '-Infinity'; DOUBLE '-1.5'; DOUBLE '-0.0'; DOUBLE '0.0'; DOUBLE '1.5'; DOUBLE 'NaN'
+double_finite|double|equal,filter,const,order,in,sum,avg,join|DOUBLE '-2.5'; DOUBLE '0.25'; DOUBLE '1.5'; DOUBLE '1e10'
+decimal_short|decimal(10,2)|equal,filter,const,order,in,sum,avg,join|DECIMAL '-99999999.99'; DECIMAL '-0.01'; DECIMAL '0.00'; DECIMAL '99999999.99'
+decimal_long|decimal(38,10)|equal,filter,const,order,in,sum,join|DECIMAL '-123456789012345678901234567.0123456789'; DECIMAL '-0.0000000001'; DECIMAL '0'; DECIMAL '123456789012345678901234567.0123456789'
+varchar|varchar|equal,filter,const,order,in,join|'a'; 'a '; 'A'; ''; 'ab'; chr(44032)
+varchar_bounded|varchar(5)|equal,filter,const,order,in,join|'a'; 'a '; 'abcde'; ''
+char|char(3)|equal,filter,const,order,in,join|'a'; 'ab'; 'A'; ''; 'a' || chr(9)
+varbinary|varbinary|equal,const,order,in,join|X''; X'00'; X'61'; X'6162'; X'ff'
+date|date|equal,filter,const,order,in,join|DATE '0001-01-01'; DATE '1969-12-31'; DATE '1970-01-01'; DATE '9999-12-31'
+time|time(6)|equal,filter,const,order,in,join|TIME '00:00:00.000000'; TIME '12:34:56.789012'; TIME '23:59:59.999999'
+time_long|time(12)|equal,filter,const,order,in,join|TIME '00:00:00.000000000001'; TIME '12:34:56.789012345678'; TIME '23:59:59.999999999999'
+time_tz|time(3) with time zone|filter,const,order|TIME '00:00:00.000 +00:00'; TIME '00:00:01.000 +00:00'; TIME '09:00:01.000 +09:00'; TIME '23:59:59.999 -08:00'; TIME '12:00:00.000 +14:00'
+time_tz_long|time(12) with time zone|filter,const,order|TIME '00:00:00.000000000000 +00:00'; TIME '00:00:01.000000000001 +00:00'; TIME '09:00:01.000000000001 +09:00'; TIME '23:59:59.999999999999 -08:00'
+timestamp|timestamp(3)|equal,filter,const,order,in,join|TIMESTAMP '0001-01-01 00:00:00.000'; TIMESTAMP '1969-12-31 23:59:59.999'; TIMESTAMP '1970-01-01 00:00:00.000'; TIMESTAMP '2026-07-26 03:00:00.123'; TIMESTAMP '9999-12-31 23:59:59.999'
+timestamp_long|timestamp(12)|equal,filter,const,order,in,join|TIMESTAMP '1969-12-31 23:59:59.999999999999'; TIMESTAMP '1970-01-01 00:00:00.000000000000'; TIMESTAMP '2026-07-26 03:00:00.123456789012'
+timestamp_tz|timestamp(3) with time zone|filter,const,order|TIMESTAMP '1969-12-31 23:59:59.999 UTC'; TIMESTAMP '1970-01-01 00:00:00.000 UTC'; TIMESTAMP '1970-01-01 09:00:00.000 Asia/Seoul'; TIMESTAMP '2024-03-10 01:30:00.000 America/New_York'; TIMESTAMP '2024-11-03 01:30:00.000 America/New_York'
+timestamp_tz_long|timestamp(12) with time zone|filter,const,order|TIMESTAMP '1969-12-31 23:59:59.999999999999 UTC'; TIMESTAMP '1970-01-01 00:00:00.000000000000 UTC'; TIMESTAMP '1970-01-01 09:00:00.000000000000 Asia/Seoul'; TIMESTAMP '2026-07-26 03:00:00.123456789012 Europe/Warsaw'
+uuid|uuid|equal,order,join|UUID '00000000-0000-0000-0000-000000000000'; UUID '00000000-0000-0000-0000-000000000001'; UUID '01000000-0000-0000-0000-000000000000'; UUID '12151fd2-7586-11e9-8f9e-2a86e4085a59'; UUID 'ffffffff-ffff-ffff-ffff-ffffffffffff'
+ipaddress|ipaddress|equal,order,join|IPADDRESS '0.0.0.0'; IPADDRESS '10.0.0.1'; IPADDRESS '255.255.255.255'; IPADDRESS '::1'; IPADDRESS '2001:db8::1'
+array|array(bigint)||ARRAY[1, 2]; ARRAY[1, NULL]; ARRAY[1]; ARRAY[]; ARRAY[2, 1]
+row|row(x integer, y varchar)||ROW(1, 'a'); ROW(1, NULL); ROW(NULL, 'a'); ROW(2, 'a')
+map|map(varchar, bigint)||MAP(ARRAY['a'], ARRAY[1]); MAP(ARRAY['a', 'b'], ARRAY[1, 2]); MAP(ARRAY['b', 'a'], ARRAY[2, 1]); MAP(); MAP(ARRAY['a'], ARRAY[NULL])

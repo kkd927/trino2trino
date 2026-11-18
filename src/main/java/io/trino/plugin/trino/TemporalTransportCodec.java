@@ -14,19 +14,21 @@
 package io.trino.plugin.trino;
 
 import io.trino.client.IntervalDayTime;
-import io.trino.client.IntervalYearMonth;
 import io.trino.plugin.jdbc.LongWriteFunction;
 import io.trino.plugin.jdbc.ObjectWriteFunction;
 import io.trino.plugin.jdbc.WriteMapping;
 import io.trino.spi.TrinoException;
 import io.trino.spi.type.DateTimeEncoding;
+import io.trino.spi.type.IntervalField;
 import io.trino.spi.type.LongTimeWithTimeZone;
 import io.trino.spi.type.LongTimestamp;
 import io.trino.spi.type.TimeType;
 import io.trino.spi.type.TimeWithTimeZoneType;
 import io.trino.spi.type.TimestampType;
 import io.trino.spi.type.Type;
+import io.trino.spi.type.TypeParameter;
 
+import java.math.BigDecimal;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -41,6 +43,12 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static io.trino.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
+import static io.trino.spi.type.IntervalField.DAY;
+import static io.trino.spi.type.IntervalField.HOUR;
+import static io.trino.spi.type.IntervalField.MINUTE;
+import static io.trino.spi.type.IntervalField.MONTH;
+import static io.trino.spi.type.IntervalField.SECOND;
+import static io.trino.spi.type.IntervalField.YEAR;
 import static java.lang.Math.toIntExact;
 
 final class TemporalTransportCodec
@@ -94,10 +102,32 @@ final class TemporalTransportCodec
 
     static long parseIntervalValue(String value, Type type)
     {
-        if (TrinoTypeClassifier.isIntervalYearToMonthType(type)) {
-            return IntervalYearMonth.parseMonths(value);
+        var parameters = type.getTypeDescriptor().getParameters();
+        int startField = toIntExact(((TypeParameter.Numeric) parameters.getFirst()).value());
+        int endField = toIntExact(((TypeParameter.Numeric) parameters.get(1)).value());
+        long sign = value.startsWith("-") ? -1 : 1;
+        String unsignedValue = sign < 0 ? value.substring(1) : value;
+        String[] parts = unsignedValue.split("[- :]");
+        if (parts.length != endField - startField + 1) {
+            throw new TrinoException(JDBC_ERROR, "Invalid interval value for " + type + ": " + value);
         }
-        return IntervalDayTime.parseMillis(value);
+
+        long[] fields = new long[IntervalField.values().length];
+        long micros = 0;
+        for (int index = 0; index < parts.length; index++) {
+            int field = startField + index;
+            if (field == SECOND.code()) {
+                micros = new BigDecimal(parts[index]).movePointRight(6).multiply(BigDecimal.valueOf(sign)).longValueExact();
+            }
+            else {
+                // Accumulate signed fields so Long.MIN_VALUE never needs a positive intermediate.
+                fields[field] = sign * Long.parseLong(parts[index]);
+            }
+        }
+        if (TrinoTypeClassifier.isIntervalYearToMonthType(type)) {
+            return toIntExact(Math.addExact(Math.multiplyExact(fields[YEAR.code()], 12), fields[MONTH.code()]));
+        }
+        return IntervalDayTime.toMicros(fields[DAY.code()], fields[HOUR.code()], fields[MINUTE.code()], 0, micros);
     }
 
     static WriteMapping timestampWriteMapping(TimestampType type)
@@ -120,8 +150,7 @@ final class TemporalTransportCodec
 
     static WriteMapping intervalWriteMapping(Type type)
     {
-        String bindType = TrinoTypeClassifier.isIntervalYearToMonthType(type) ? "interval year to month" : "interval day to second";
-        return WriteMapping.longMapping(bindType, intervalTransportWriteFunction(type));
+        return WriteMapping.longMapping(type.getDisplayName(), intervalTransportWriteFunction(type));
     }
 
     static LongWriteFunction timeTransportWriteFunction(TimeType type)
@@ -182,7 +211,9 @@ final class TemporalTransportCodec
         if (TrinoTypeClassifier.isIntervalYearToMonthType(type)) {
             return "INTERVAL '1' MONTH * CAST(? AS INTEGER)";
         }
-        return "INTERVAL '0.001' SECOND * CAST(? AS BIGINT)";
+        // Pre-484 servers evaluate this product with millisecond precision and silently
+        // return zero. The parametric target type makes them reject the query instead.
+        return "CAST(INTERVAL '0.000001' SECOND * CAST(? AS BIGINT) AS " + type.getDisplayName() + ")";
     }
 
     private static LongWriteFunction stringLongTransportWriteFunction(String bindType, LongFunction<String> formatter)

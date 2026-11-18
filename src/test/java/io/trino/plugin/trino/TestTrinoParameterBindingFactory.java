@@ -95,10 +95,10 @@ class TestTrinoParameterBindingFactory
                 "CAST(? AS number)");
         assertBinding(
                 new Constant(14L, IntervalYearMonthType.INTERVAL_YEAR_MONTH),
-                "CAST(INTERVAL '1' MONTH * CAST(? AS INTEGER) AS interval year to month)");
+                "CAST(INTERVAL '1' MONTH * CAST(? AS INTEGER) AS interval year(9) to month)");
         assertBinding(
                 new Constant(1_234L, IntervalDayTimeType.INTERVAL_DAY_TIME),
-                "CAST(INTERVAL '0.001' SECOND * CAST(? AS BIGINT) AS interval day to second)");
+                "CAST(INTERVAL '0.000001' SECOND * CAST(? AS BIGINT) AS interval day(9) to second(6))");
     }
 
     @Test
@@ -122,7 +122,9 @@ class TestTrinoParameterBindingFactory
 
         writeFunction.set(statement, 1, value);
 
-        assertThat(writeFunction.getBindExpression()).isEqualTo("INTERVAL '0.001' SECOND * CAST(? AS BIGINT)");
+        // The explicit parametric type makes pre-484 servers reject the predicate instead
+        // of evaluating the microsecond unit as zero milliseconds
+        assertThat(writeFunction.getBindExpression()).isEqualTo("CAST(INTERVAL '0.000001' SECOND * CAST(? AS BIGINT) AS interval day(9) to second(6))");
         assertThat(invokedMethod).hasValue("setLong");
         assertThat(boundValue).hasValue(value);
     }

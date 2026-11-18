@@ -18,8 +18,8 @@ import java.util.function.LongSupplier;
 
 /**
  * Suppresses retry attempts for a fixed window after the most recent failure.
- * Concurrent attempts are intentionally allowed, matching the surrounding
- * capabilities loading behavior.
+ * It does not serialize attempts. A caller that needs one attempt at a time
+ * serializes them itself.
  */
 final class FailureBackoff
 {

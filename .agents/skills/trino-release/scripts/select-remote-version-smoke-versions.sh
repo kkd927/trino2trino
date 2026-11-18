@@ -43,6 +43,25 @@ add_version() {
   selected_count=$((selected_count + 1))
 }
 
+# Adds a supported release that no other release stands in for, also when the
+# three samples are already selected.
+add_required_version() {
+  local required="$1"
+  local index
+
+  [[ "${required}" != "${target_version}" ]] || return 0
+  for ((index = 0; index < selected_count; index++)); do
+    [[ "${selected[index]}" != "${required}" ]] || return 0
+  done
+  for ((index = 0; index < version_count; index++)); do
+    if [[ "${versions[index]}" == "${required}" ]]; then
+      selected[selected_count]="${required}"
+      selected_count=$((selected_count + 1))
+      return 0
+    fi
+  done
+}
+
 highest_less_than() {
   local ceiling="$1"
   local index
@@ -106,12 +125,14 @@ if (( 10#${target_version} >= 481 )); then
   fi
 fi
 
+# Trino 482 alone drops the negation of a negated NULLIF and times out on a cast
+# compared with date_trunc, so no other release shows that the connector keeps
+# such expressions local.
+add_required_version 482
+
 if [[ "${selected_count}" -eq 0 ]]; then
   printf '\n'
 else
-  output="${selected[0]}"
-  for ((index = 1; index < selected_count; index++)); do
-    output="${output} ${selected[index]}"
-  done
-  printf '%s\n' "${output}"
+  printf '%s\n' "${selected[@]}" | sort -n | tr '\n' ' ' | sed 's/ $//'
+  printf '\n'
 fi

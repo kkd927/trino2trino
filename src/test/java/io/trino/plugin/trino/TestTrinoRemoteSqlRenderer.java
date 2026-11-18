@@ -105,7 +105,7 @@ class TestTrinoRemoteSqlRenderer
     }
 
     @Test
-    void testCharToVarcharCastUsesRemoteSemanticsProbe()
+    void testCharToVarcharCast()
     {
         ConnectorExpression cast = new Call(
                 VARCHAR,
@@ -113,101 +113,57 @@ class TestTrinoRemoteSqlRenderer
                 List.of(new Variable("c", createCharType(3))));
         Map<String, ColumnHandle> assignments = Map.of("c", column("c", CHAR3_TYPE_HANDLE, createCharType(3)));
 
+        // A remote server of the local version casts as the local server does
         assertThat(render(cast, assignments).expression())
                 .isEqualTo("CAST(\"c\" AS varchar)");
 
-        ParameterizedExpression legacy = render(
-                cast,
-                assignments,
-                TrinoRemoteCapabilities.forTestingLegacyCharToVarcharCast(Set.of()));
-        assertThat(legacy.expression())
-                .isEqualTo("CAST(trim(TRAILING ' ' FROM \"c\") AS varchar)");
-
-        assertThat(renderer.renderExpression(
-                SESSION,
-                cast,
-                assignments,
-                new TrinoRemoteCapabilities(Optional.of("unknown"), Optional.of(Set.of()), Optional.of("UTC"), Optional.empty())))
+        // Servers before Trino 482 keep the trailing spaces, so other versions get no cast
+        assertThat(renderer.renderExpression(SESSION, cast, assignments, TrinoRemoteCapabilities.forTestingOtherVersion(Set.of())))
+                .isEmpty();
+        assertThat(renderer.renderExpression(SESSION, cast, assignments, TrinoRemoteCapabilities.unavailable()))
                 .isEmpty();
     }
 
     @Test
-    void testNestedCharToVarcharCastRequiresRemoteTrimmingSemantics()
+    void testOtherVersionRemoteReceivesOnlyBasicExpressions()
     {
-        ArrayType sourceType = new ArrayType(createCharType(3));
-        ArrayType targetType = new ArrayType(VARCHAR);
-        ConnectorExpression cast = new Call(
-                targetType,
-                StandardFunctions.CAST_FUNCTION_NAME,
-                List.of(new Variable("values", sourceType)));
+        TrinoRemoteCapabilities otherVersion = TrinoRemoteCapabilities.forTestingOtherVersion(Set.of("regexp_like", "lower"));
         Map<String, ColumnHandle> assignments = Map.of(
-                "values", column(
-                        "values",
-                        new JdbcTypeHandle(Types.ARRAY, Optional.of("array(char(3))"), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty()),
-                        sourceType));
-
-        assertThat(render(cast, assignments).expression())
-                .isEqualTo("CAST(\"values\" AS array(varchar))");
-        assertThat(renderer.renderExpression(
-                SESSION,
-                cast,
-                assignments,
-                TrinoRemoteCapabilities.forTestingLegacyCharToVarcharCast(Set.of())))
-                .isEmpty();
-        assertThat(renderer.renderExpression(
-                SESSION,
-                cast,
-                assignments,
-                TrinoRemoteCapabilities.unavailable()))
-                .isEmpty();
-    }
-
-    @Test
-    void testLegacyCharToVarcharCastIsCorrectedInsideNestedExpression()
-    {
-        ConnectorExpression expression = new Call(
-                VARCHAR,
-                new FunctionName("concat"),
-                List.of(
-                        new Call(
-                                VARCHAR,
-                                StandardFunctions.CAST_FUNCTION_NAME,
-                                List.of(new Variable("c", createCharType(3)))),
-                        varcharConstant("-suffix")));
+                "a", column("a"),
+                "b", column("b"),
+                "v", column("v", VARCHAR_TYPE_HANDLE, VARCHAR));
+        ConnectorExpression comparison = new Call(
+                BOOLEAN,
+                StandardFunctions.LESS_THAN_OPERATOR_FUNCTION_NAME,
+                List.of(new Variable("a", BIGINT), new Variable("b", BIGINT)));
+        ConnectorExpression isNull = new Call(
+                BOOLEAN,
+                StandardFunctions.IS_NULL_FUNCTION_NAME,
+                List.of(new Variable("v", VARCHAR)));
 
         ParameterizedExpression rewritten = render(
-                expression,
-                Map.of("c", column("c", CHAR3_TYPE_HANDLE, createCharType(3))),
-                TrinoRemoteCapabilities.forTestingLegacyCharToVarcharCast(Set.of("concat")));
+                new Call(BOOLEAN, StandardFunctions.OR_FUNCTION_NAME, List.of(comparison, isNull)),
+                assignments,
+                otherVersion);
+        assertThat(rewritten.expression()).isEqualTo("((\"a\" < \"b\") OR (\"v\" IS NULL))");
 
-        assertThat(rewritten.expression())
-                .isEqualTo("concat(CAST(trim(TRAILING ' ' FROM \"c\") AS varchar), CAST(? AS varchar))");
-        assertThat(rewritten.parameters()).hasSize(1);
-    }
-
-    @Test
-    void testLegacyCharToVarcharCastIsCorrectedInsidePredicate()
-    {
-        ConnectorExpression expression = new Call(
+        ConnectorExpression function = new Call(VARCHAR, new FunctionName("lower"), List.of(new Variable("v", VARCHAR)));
+        ConnectorExpression functionComparison = new Call(
                 BOOLEAN,
                 StandardFunctions.EQUAL_OPERATOR_FUNCTION_NAME,
-                List.of(
-                        new Call(
-                                VARCHAR,
-                                StandardFunctions.CAST_FUNCTION_NAME,
-                                List.of(new Variable("c", createCharType(3)))),
-                        new Variable("v", VARCHAR)));
-
-        ParameterizedExpression rewritten = render(
-                expression,
-                Map.of(
-                        "c", column("c", CHAR3_TYPE_HANDLE, createCharType(3)),
-                        "v", column("v", VARCHAR_TYPE_HANDLE, VARCHAR)),
-                TrinoRemoteCapabilities.forTestingLegacyCharToVarcharCast(Set.of()));
-
-        assertThat(rewritten.expression())
-                .isEqualTo("(CAST(trim(TRAILING ' ' FROM \"c\") AS varchar) = \"v\")");
-        assertThat(rewritten.parameters()).isEmpty();
+                List.of(function, new Variable("v", VARCHAR)));
+        ConnectorExpression arithmetic = new Call(
+                BIGINT,
+                StandardFunctions.ADD_FUNCTION_NAME,
+                List.of(new Variable("a", BIGINT), new Variable("b", BIGINT)));
+        for (ConnectorExpression expression : List.of(function, functionComparison, arithmetic)) {
+            assertThat(renderer.renderExpression(SESSION, expression, assignments, otherVersion))
+                    .as(expression.toString())
+                    .isEmpty();
+            assertThat(renderer.renderExpression(SESSION, expression, assignments, TrinoRemoteCapabilities.forTesting(Set.of("lower"))))
+                    .as(expression.toString())
+                    .isPresent();
+        }
     }
 
     @Test

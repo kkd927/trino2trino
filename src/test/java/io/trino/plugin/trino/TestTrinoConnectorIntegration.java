@@ -526,7 +526,7 @@ abstract class TestTrinoConnectorIntegration
                     query => 'SELECT MAP(ARRAY[1, 2], ARRAY[INTERVAL ''1'' DAY, INTERVAL ''2'' DAY]) AS m'
                 ))
                 """);
-        assertThat(result.getOnlyValue()).isEqualTo("2 00:00:00.000");
+        assertThat(result.getOnlyValue()).isEqualTo("2");
     }
 
     @Test
@@ -549,6 +549,62 @@ abstract class TestTrinoConnectorIntegration
                 ))
                 """))
                 .matches("VALUES (CAST(NULL AS INTERVAL DAY TO SECOND), CAST(NULL AS INTERVAL YEAR TO MONTH))");
+    }
+
+    @Test
+    void testQueryPassthroughMicrosecondIntervals()
+    {
+        assertThat(query(
+                """
+                SELECT positive, negative, duration
+                FROM TABLE(remote.system.query(
+                    query => 'SELECT INTERVAL ''0.000001'' SECOND AS positive, INTERVAL ''-0.000001'' SECOND AS negative, INTERVAL ''2 03:04:05.678901'' DAY TO SECOND AS duration'
+                ))
+                """))
+                .matches("VALUES (INTERVAL '0.000001' SECOND, INTERVAL '-0.000001' SECOND, INTERVAL '2 03:04:05.678901' DAY TO SECOND)");
+    }
+
+    @Test
+    void testQueryPassthroughPicosecondIntervalFallsBackToVarchar()
+    {
+        assertThat(query(
+                """
+                SELECT x
+                FROM TABLE(remote.system.query(
+                    query => 'SELECT INTERVAL ''0.123456789012'' SECOND AS x UNION ALL SELECT CAST(NULL AS INTERVAL SECOND(13, 12))'
+                ))
+                """))
+                .matches("VALUES CAST('0 00:00:00.123456789012' AS VARCHAR), CAST(NULL AS VARCHAR)");
+    }
+
+    @Test
+    void testHighPrecisionTemporalDifferencesFallBackLocally()
+    {
+        String localValues =
+                """
+                (VALUES (TIMESTAMP '2026-01-02 00:00:00.123456789012',
+                         TIMESTAMP '2026-01-01 00:00:00.000000000001',
+                         TIME '12:00:00.123456789012', TIME '01:00:00.000000000001')) AS v(a, b, t, u)
+                """;
+        for (String handling : List.of("IGNORE", "CONVERT_TO_VARCHAR")) {
+            Session session = Session.builder(getSession())
+                    .setCatalogSessionProperty("remote", "unsupported_type_handling", handling)
+                    .build();
+            for (int precision : List.of(7, 9, 12)) {
+                String difference = "CAST(a AS timestamp(%s)) - CAST(b AS timestamp(%s))".formatted(precision, precision);
+                String timeDifference = "CAST(t AS time(%s)) - CAST(u AS time(%s))".formatted(precision, precision);
+                String expressions = "%s, %s, ARRAY[%s], ROW(%s), MAP(ARRAY['ds'], ARRAY[%s])"
+                        .formatted(difference, timeDifference, difference, difference, difference);
+                assertThat(query(session, "SELECT " + expressions + " FROM remote.default.test_temporal_difference"))
+                        .matches("SELECT " + expressions + " FROM " + localValues);
+                assertThat(query(session, "SELECT max(" + difference + ") FROM remote.default.test_temporal_difference"))
+                        .matches("SELECT " + difference + " FROM " + localValues);
+                assertThat(query(session, "SELECT a FROM remote.default.test_temporal_difference ORDER BY " + difference))
+                        .matches("SELECT a FROM " + localValues);
+            }
+            assertThat(query(session, "SELECT CAST(a - b AS VARCHAR) FROM remote.default.test_temporal_difference"))
+                    .matches("VALUES VARCHAR '1 00:00:00.123456789011'");
+        }
     }
 
     @Test
@@ -1018,6 +1074,18 @@ abstract class TestTrinoConnectorIntegration
                         "WHERE a.id = 1"))
                 .joinIsNotFullyPushedDown()
                 .matches("VALUES (1, CAST('POINT Z (1 2 3)' AS VARCHAR), CAST('POINT (1 2)' AS VARCHAR))");
+    }
+
+    @Test
+    void testInPredicateThatStaysLocalKeepsItsValueList()
+    {
+        // When IN cannot be pushed down, base-jdbc retries its arguments one by one. The
+        // engine requires the IN value list to remain an array constructor, so pushing
+        // that list as a separate remote column made the query fail.
+        assertThat(query("SELECT reverse(path) IN ('001/tsop/', 'x') FROM remote.default.test_delegation_log WHERE path = '/post/100'"))
+                .matches("VALUES true");
+        assertThat(query("SELECT NOT (reverse(path) IN ('001/tsop/', 'x')) FROM remote.default.test_delegation_log WHERE path = '/post/100'"))
+                .matches("VALUES false");
     }
 
     @Test

@@ -801,7 +801,7 @@ abstract class AbstractTestTrinoTypeMapping
     void testIntervalDayToSecondTransport()
     {
         assertThat(computeActual("SELECT CAST(x AS VARCHAR) FROM remote.default.test_interval_day_to_second").getOnlyValue())
-                .isEqualTo("2 03:04:05.678");
+                .isEqualTo("2 03:04:05.678000");
     }
 
     @Test
@@ -879,13 +879,13 @@ abstract class AbstractTestTrinoTypeMapping
         assertThat(describe.getMaterializedRows()).anySatisfy(row -> {
             assertThat(row.getField(0)).isEqualTo("unsupported_col");
             assertThat(row.getField(1).toString()).contains("map");
-            assertThat(row.getField(1).toString()).contains("interval day to second");
+            assertThat(row.getField(1).toString()).contains("interval day(1)");
         });
         assertThat(computeActual(
                 """
                 SELECT CAST(element_at(unsupported_col, 'duration') AS VARCHAR)
                 FROM remote.default.test_nested_unsupported_map
-                """).getOnlyValue()).isEqualTo("1 00:00:00.000");
+                """).getOnlyValue()).isEqualTo("1");
     }
 
     @Test
@@ -897,13 +897,13 @@ abstract class AbstractTestTrinoTypeMapping
             assertThat(row.getField(0)).isEqualTo("unsupported_col");
             assertThat(row.getField(1).toString()).contains("map");
             assertThat(row.getField(1).toString()).contains("integer");
-            assertThat(row.getField(1).toString()).contains("interval day to second");
+            assertThat(row.getField(1).toString()).contains("interval day(1)");
         });
         assertThat(computeActual(
                 """
                 SELECT CAST(element_at(unsupported_col, 2) AS VARCHAR)
                 FROM remote.default.test_nested_unsupported_map_int_key
-                """).getOnlyValue()).isEqualTo("2 00:00:00.000");
+                """).getOnlyValue()).isEqualTo("2");
     }
 
     @Test
@@ -915,7 +915,7 @@ abstract class AbstractTestTrinoTypeMapping
                 FROM remote.default.test_nested_unsupported_map_row_key
                 CROSS JOIN UNNEST(unsupported_col) AS t(k, v)
                 WHERE k.x = 2
-                """).getOnlyValue()).isEqualTo("2 00:00:00.000");
+                """).getOnlyValue()).isEqualTo("2");
     }
 
     @Test
@@ -925,13 +925,13 @@ abstract class AbstractTestTrinoTypeMapping
         assertThat(describe.getRowCount()).isEqualTo(2);
         assertThat(describe.getMaterializedRows()).anySatisfy(row -> {
             assertThat(row.getField(0)).isEqualTo("unsupported_col");
-            assertThat(row.getField(1).toString()).isEqualTo("row(\"x\" interval day to second)");
+            assertThat(row.getField(1).toString()).isEqualTo("row(\"x\" interval day(2) to second(6))");
         });
         assertThat(computeActual(
                 """
                 SELECT CAST(unsupported_col.x AS VARCHAR)
                 FROM remote.default.test_nested_unsupported_row
-                """).getOnlyValue()).isEqualTo("1 00:00:00.000");
+                """).getOnlyValue()).isEqualTo("1 00:00:00.000000");
     }
 
     @Test
@@ -952,8 +952,8 @@ abstract class AbstractTestTrinoTypeMapping
         assertDescribeColumnType("test_tdigest", "x", "tdigest");
         assertDescribeColumnType("test_setdigest", "x", "setdigest");
         assertDescribeColumnType("test_nested_unsupported_array", "unsupported_col", "array(time(3) with time zone)");
-        assertDescribeColumnType("test_nested_unsupported_map", "unsupported_col", "map(varchar(8), interval day to second)");
-        assertDescribeColumnType("test_nested_unsupported_row", "unsupported_col", "row(\"x\" interval day to second)");
+        assertDescribeColumnType("test_nested_unsupported_map", "unsupported_col", "map(varchar(8), interval day(1))");
+        assertDescribeColumnType("test_nested_unsupported_row", "unsupported_col", "row(\"x\" interval day(2) to second(6))");
     }
 
     private void assertDescribeColumnType(String tableName, String columnName, String expectedType)

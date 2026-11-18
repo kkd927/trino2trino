@@ -64,6 +64,80 @@ class TestTrinoTypeParser
     }
 
     @Test
+    void testIntervalQualifiersAndPrecision()
+    {
+        for (String typeName : List.of("interval year(4)", "interval month(5)", "interval year(4) to month", "interval day(4)", "interval hour(6) to second(6)", "interval second(10, 6)")) {
+            Type type = parse(typeName);
+            assertThat(type).isNotNull();
+            assertThat(TrinoTypeClassifier.requiresVarcharTransport(type)).isTrue();
+            assertThat(TrinoParameterBindingFactory.createWriteMapping(type).orElseThrow().getDataType()).isEqualTo(type.getDisplayName());
+        }
+
+        Type picosecondInterval = parse("interval second(10, 12)");
+        assertThat(picosecondInterval).isNotNull();
+        assertThat(TrinoTypeClassifier.requiresVarcharTransport(picosecondInterval)).isFalse();
+        assertThat(TrinoTypeClassifier.requiresJsonTransport(new ArrayType(picosecondInterval))).isFalse();
+        assertThat(TrinoParameterBindingFactory.createWriteMapping(picosecondInterval)).isEmpty();
+    }
+
+    @Test
+    void testLegacyIntervalMetadataUsesPersistedTypeDefaults()
+    {
+        // Same as the engine reading stored pre-484 metadata: millisecond fractional
+        // precision and the maximum leading precision of the legacy types
+        assertThat(parse("interval day to second")).isEqualTo(parse("interval day(9) to second(3)"));
+        assertThat(parse("interval year to month")).isEqualTo(parse("interval year(9) to month"));
+        assertThat(parse("array(interval day to second)"))
+                .isEqualTo(parse("array(interval day(9) to second(3))"));
+        assertThat(parse("row(ds interval day to second, ym interval year to month)"))
+                .isEqualTo(parse("row(ds interval day(9) to second(3), ym interval year(9) to month)"));
+        // Explicit qualifiers must retain their precision.
+        assertThat(parse("interval day(2) to second(3)").getDisplayName()).isEqualTo("interval day(2) to second(3)");
+    }
+
+    @Test
+    void testLegacyIntervalTypeNameDetection()
+    {
+        for (String typeName : List.of("interval day to second", "INTERVAL YEAR TO MONTH", "array(interval day to second)", "row(ds interval year to month)", "map(varchar, interval day to second)")) {
+            assertThat(TrinoTypeNameParser.containsLegacyIntervalTypeName(typeName)).as(typeName).isTrue();
+        }
+        // Trino 484 and later report precision even for columns declared without one
+        for (String typeName : List.of("interval day(2) to second(6)", "interval year(2) to month", "interval day(9) to second(3)", "interval second(2, 6)", "interval hour(2) to minute", "array(interval day(2) to second(6))", "varchar")) {
+            assertThat(TrinoTypeNameParser.containsLegacyIntervalTypeName(typeName)).as(typeName).isFalse();
+        }
+    }
+
+    @Test
+    void testIntervalDetectionIncludesLongAndNestedIntervals()
+    {
+        for (String typeName : List.of("interval year(9) to month", "interval second(13, 12)", "array(interval day to second)", "map(varchar, row(ds interval second(13, 9)))")) {
+            assertThat(TrinoTypeClassifier.containsIntervalType(parse(typeName))).as(typeName).isTrue();
+        }
+        assertThat(TrinoTypeClassifier.containsIntervalType(parse("row(ts timestamp(12), values array(bigint))"))).isFalse();
+    }
+
+    @Test
+    void testIntervalTransportParsing()
+    {
+        assertIntervalValue("interval year(9)", "178956970", 2_147_483_640L);
+        assertIntervalValue("interval month(10)", "-2147483648", Integer.MIN_VALUE);
+        assertIntervalValue("interval year(9) to month", "-178956970-8", Integer.MIN_VALUE);
+        assertIntervalValue("interval day(4)", "1234", 106_617_600_000_000L);
+        assertIntervalValue("interval day(2) to hour", "2 03", 183_600_000_000L);
+        assertIntervalValue("interval hour(6) to second(6)", "27:03:04.123456", 97_384_123_456L);
+        assertIntervalValue("interval minute(6) to second(6)", "150:01.000001", 9_001_000_001L);
+        assertIntervalValue("interval second(13, 6)", "0.000001", 1);
+        assertIntervalValue("interval second(13, 6)", "-0.000001", -1);
+        assertIntervalValue("interval day(9) to second(6)", "106751991 04:00:54.775807", Long.MAX_VALUE);
+        assertIntervalValue("interval day(9) to second(6)", "-106751991 04:00:54.775808", Long.MIN_VALUE);
+    }
+
+    private void assertIntervalValue(String typeName, String value, long expected)
+    {
+        assertThat(TemporalTransportCodec.parseIntervalValue(value, parse(typeName))).isEqualTo(expected);
+    }
+
+    @Test
     void testVarcharTypes()
     {
         assertThat(parse("varchar")).isEqualTo(VARCHAR);

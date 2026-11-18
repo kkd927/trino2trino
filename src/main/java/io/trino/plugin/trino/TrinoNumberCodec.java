@@ -14,9 +14,13 @@
 package io.trino.plugin.trino;
 
 import io.trino.plugin.jdbc.ColumnMapping;
+import io.trino.plugin.jdbc.JdbcTypeHandle;
 import io.trino.plugin.jdbc.ObjectReadFunction;
 import io.trino.plugin.jdbc.ObjectWriteFunction;
+import io.trino.plugin.jdbc.PredicatePushdownController;
 import io.trino.plugin.jdbc.WriteMapping;
+import io.trino.spi.predicate.Range;
+import io.trino.spi.predicate.ValueSet;
 import io.trino.spi.type.NumberType;
 import io.trino.spi.type.SqlNumber;
 import io.trino.spi.type.TrinoNumber;
@@ -25,9 +29,27 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.Types;
+
+import static io.trino.plugin.jdbc.PredicatePushdownController.DISABLE_PUSHDOWN;
+import static io.trino.plugin.jdbc.PredicatePushdownController.FULL_PUSHDOWN;
 
 final class TrinoNumberCodec
 {
+    /**
+     * Keeps filters with single number values local. Servers before Trino 482 compare
+     * number values by their bytes, and a value rounded to the supported precision can
+     * keep trailing zeros, so such a server misses rows equal to a listed value. Ranges
+     * use the numeric order on every version and stay pushed down.
+     */
+    static final PredicatePushdownController SINGLE_VALUES_LOCAL_PUSHDOWN = (session, domain) -> {
+        ValueSet values = domain.getValues();
+        if (!values.isNone() && !values.isAll() && values.getRanges().getOrderedRanges().stream().anyMatch(Range::isSingleValue)) {
+            return DISABLE_PUSHDOWN.apply(session, domain);
+        }
+        return FULL_PUSHDOWN.apply(session, domain);
+    };
+
     private TrinoNumberCodec() {}
 
     static ColumnMapping numberColumnMapping()
@@ -36,6 +58,17 @@ final class TrinoNumberCodec
                 NumberType.NUMBER,
                 ObjectReadFunction.of(TrinoNumber.class, (rs, idx) -> parse(rs.getString(idx))),
                 numberWriteFunction());
+    }
+
+    /**
+     * Whether the type handle carries the column metadata that Trino 484 and later report
+     * for number columns. Earlier servers report JDBC type JAVA_OBJECT without a column
+     * size. Handles that the connector builds from a type name, for query passthrough and
+     * generated columns, have no column size either.
+     */
+    static boolean hasTrino484Metadata(JdbcTypeHandle typeHandle)
+    {
+        return typeHandle.jdbcType() == Types.OTHER && typeHandle.columnSize().isPresent();
     }
 
     static WriteMapping numberWriteMapping()

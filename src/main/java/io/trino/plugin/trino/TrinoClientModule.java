@@ -59,6 +59,7 @@ public class TrinoClientModule
         configBinder(binder).bindConfigDefaults(TypeHandlingJdbcConfig.class, config -> config.setUnsupportedTypeHandling(UnsupportedTypeHandling.CONVERT_TO_VARCHAR));
         configBinder(binder).bindConfig(JdbcStatisticsConfig.class);
         configBinder(binder).bindConfig(TrinoRemoteDelegationConfig.class);
+        configBinder(binder).bindConfig(TrinoRemoteServerConfig.class);
         JdbcModule.bindSessionPropertiesProvider(binder, TrinoRemoteDelegationSessionProperties.class);
         install(new DecimalModule());
         install(new JdbcJoinPushdownSupportModule());

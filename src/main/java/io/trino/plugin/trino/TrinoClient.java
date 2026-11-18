@@ -51,6 +51,7 @@ import io.trino.plugin.jdbc.expression.JdbcConnectorExpressionRewriterBuilder;
 import io.trino.plugin.jdbc.expression.ParameterizedExpression;
 import io.trino.plugin.jdbc.expression.RewriteComparison;
 import io.trino.plugin.jdbc.logging.RemoteQueryModifier;
+import io.trino.spi.NodeVersion;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.AggregateFunction;
 import io.trino.spi.connector.ColumnHandle;
@@ -63,6 +64,7 @@ import io.trino.spi.connector.JoinType;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.expression.Call;
 import io.trino.spi.expression.ConnectorExpression;
+import io.trino.spi.expression.Constant;
 import io.trino.spi.expression.FunctionName;
 import io.trino.spi.expression.StandardFunctions;
 import io.trino.spi.statistics.ColumnStatistics;
@@ -86,13 +88,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static io.trino.matching.Pattern.typeOf;
+import static io.trino.plugin.jdbc.PredicatePushdownController.DISABLE_PUSHDOWN;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static java.lang.String.format;
@@ -124,8 +126,8 @@ public class TrinoClient
     private final PassthroughQueryMetadataHelper passthroughQueryMetadataHelper;
     private final TrinoDelegationAnalyzer delegationAnalyzer;
     private final boolean statisticsEnabled;
-    private final AtomicReference<TrinoRemoteCapabilities> remoteCapabilities = new AtomicReference<>();
-    private final FailureBackoff capabilitiesLoadBackoff = new FailureBackoff(CAPABILITIES_LOAD_BACKOFF);
+    private final String localVersion;
+    private final TrinoRemoteCapabilitiesCache remoteCapabilities;
     private final AtomicBoolean remoteVersionLogged = new AtomicBoolean();
 
     @Inject
@@ -136,9 +138,17 @@ public class TrinoClient
             QueryBuilder queryBuilder,
             TypeManager typeManager,
             IdentifierMapping identifierMapping,
-            RemoteQueryModifier remoteQueryModifier)
+            RemoteQueryModifier remoteQueryModifier,
+            NodeVersion nodeVersion,
+            TrinoRemoteServerConfig remoteServerConfig)
     {
         super("\"", connectionFactory, queryBuilder, config.getJdbcTypesMappedToVarchar(), identifierMapping, remoteQueryModifier, true);
+        this.localVersion = nodeVersion.version();
+        this.remoteCapabilities = TrinoRemoteCapabilitiesCache.create(
+                localVersion,
+                remoteServerConfig.getCheckInterval().toJavaTime(),
+                CAPABILITIES_LOAD_BACKOFF,
+                this::logRemoteCapabilities);
         this.statisticsEnabled = statisticsConfig.isEnabled();
         this.jsonTransportHelper = new JsonTransportHelper(this::quoted);
         this.readMappingFactory = new TrinoReadMappingFactory(typeManager, typeHandle -> mapToUnboundedVarchar(typeHandle));
@@ -259,7 +269,9 @@ public class TrinoClient
     @Override
     public boolean supportsTopN(ConnectorSession session, JdbcTableHandle handle, List<JdbcSortItem> sortOrder)
     {
-        return true;
+        TrinoRemoteCapabilities capabilities = getRemoteCapabilities(session);
+        return sortOrder.stream()
+                .allMatch(sortItem -> TrinoCompatibilityRegistry.isOrderingDelegable(sortItem.column().getColumnType(), capabilities));
     }
 
     @Override
@@ -271,29 +283,81 @@ public class TrinoClient
     }
 
     @Override
+    public boolean supportsAggregationPushdown(
+            ConnectorSession session,
+            JdbcTableHandle table,
+            List<AggregateFunction> aggregates,
+            Map<String, ColumnHandle> assignments,
+            List<List<ColumnHandle>> groupingSets)
+    {
+        TrinoRemoteCapabilities capabilities = getRemoteCapabilities(session);
+        List<List<Type>> groupingSetTypes = groupingSets.stream()
+                .map(groupingSet -> groupingSet.stream()
+                        .map(column -> ((JdbcColumnHandle) column).getColumnType())
+                        .toList())
+                .toList();
+        return TrinoCompatibilityRegistry.isAggregationDelegable(aggregates, groupingSetTypes, capabilities);
+    }
+
+    @Override
     public Optional<JdbcExpression> implementAggregation(ConnectorSession session, AggregateFunction aggregate, Map<String, ColumnHandle> assignments)
     {
-        return delegationAnalyzer.analyzeAggregation(session, aggregate, assignments, getRemoteCapabilities(session))
+        TrinoRemoteCapabilities capabilities = getRemoteCapabilities(session);
+        // Guard both delegation and the baseline aggregate rewriter, which pushes
+        // aggregations even when delegation is disabled
+        if (!supportsRemoteResult(session, aggregate.getOutputType()) ||
+                !TrinoCompatibilityRegistry.isAggregateDelegable(aggregate, capabilities)) {
+            return Optional.empty();
+        }
+        return delegationAnalyzer.analyzeAggregation(session, aggregate, assignments, capabilities)
                 .or(() -> aggregateFunctionRewriter.rewrite(session, aggregate, assignments));
     }
 
     @Override
     public Optional<ParameterizedExpression> convertPredicate(ConnectorSession session, ConnectorExpression expression, Map<String, ColumnHandle> assignments)
     {
-        if (referencesGeospatialType(expression)) {
+        TrinoRemoteCapabilities capabilities = getRemoteCapabilities(session);
+        // Guard both delegation and the baseline JDBC rewriter. These decisions run only
+        // on the coordinator, which stores the pushed expression in the table handle.
+        if (referencesGeospatialType(expression) || !TrinoCompatibilityRegistry.isExpressionDelegable(expression, capabilities)) {
             return Optional.empty();
         }
-        return delegationAnalyzer.analyzePredicate(session, expression, assignments, getRemoteCapabilities(session))
+        return delegationAnalyzer.analyzePredicate(session, expression, assignments, capabilities)
                 .or(() -> connectorExpressionRewriter.rewrite(session, expression, assignments));
     }
 
     @Override
     public Optional<JdbcExpression> convertProjection(ConnectorSession session, JdbcTableHandle handle, ConnectorExpression expression, Map<String, ColumnHandle> assignments)
     {
-        if (referencesGeospatialType(expression) || !handle.getUpdateAssignments().isEmpty() || assignments.values().stream().anyMatch(TrinoClient::isHiddenJdbcColumn)) {
+        if (referencesGeospatialType(expression) || !handle.getUpdateAssignments().isEmpty() || assignments.values().stream().anyMatch(TrinoClient::isHiddenJdbcColumn) ||
+                isArgumentOnlyProjection(expression) || !supportsRemoteResult(session, expression.getType())) {
             return Optional.empty();
         }
-        return delegationAnalyzer.analyzeProjection(session, expression, assignments, getRemoteCapabilities(session));
+        TrinoRemoteCapabilities capabilities = getRemoteCapabilities(session);
+        if (!TrinoCompatibilityRegistry.isExpressionDelegable(expression, capabilities)) {
+            return Optional.empty();
+        }
+        return delegationAnalyzer.analyzeProjection(session, expression, assignments, capabilities);
+    }
+
+    private static boolean isArgumentOnlyProjection(ConnectorExpression expression)
+    {
+        // Base-jdbc retries each argument of a projection that it cannot push down. A
+        // constant gains nothing from remote evaluation, and the engine translates an
+        // IN predicate back only while its value list is still an array constructor.
+        return expression instanceof Constant ||
+                (expression instanceof Call call && call.getFunctionName().equals(StandardFunctions.ARRAY_CONSTRUCTOR_FUNCTION_NAME));
+    }
+
+    private boolean supportsRemoteResult(ConnectorSession session, Type type)
+    {
+        JdbcTypeHandle typeHandle = TrinoRemoteSqlRenderer.jdbcTypeHandleFor(type);
+        // A generated column must keep its logical type. Unsupported-type VARCHAR
+        // fallback is valid for source columns, but would corrupt an expression's type.
+        return getForcedMappingToVarchar(typeHandle)
+                .or(() -> readMappingFactory.createColumnMapping(session, typeHandle))
+                .map(mapping -> mapping.getType().equals(type))
+                .orElse(false);
     }
 
     private static boolean referencesGeospatialType(ConnectorExpression expression)
@@ -310,6 +374,20 @@ public class TrinoClient
         if (GeospatialTransport.containsGeospatialType(joinCondition.getLeftColumn().getColumnType()) ||
                 GeospatialTransport.containsGeospatialType(joinCondition.getRightColumn().getColumnType())) {
             return false;
+        }
+        // The legacy join path, used when complex join pushdown is disabled, checks join
+        // conditions only here instead of converting them with convertPredicate, so it needs
+        // the same check of the compared types
+        TrinoRemoteCapabilities capabilities = getRemoteCapabilities(session);
+        for (Type type : List.of(joinCondition.getLeftColumn().getColumnType(), joinCondition.getRightColumn().getColumnType())) {
+            boolean delegable = switch (joinCondition.getOperator()) {
+                case EQUAL, IDENTICAL -> TrinoCompatibilityRegistry.isEqualDelegable(type, capabilities);
+                case NOT_EQUAL -> TrinoCompatibilityRegistry.isEqualityDelegable(type, capabilities);
+                case LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN, GREATER_THAN_OR_EQUAL -> TrinoCompatibilityRegistry.isOrderingDelegable(type, capabilities);
+            };
+            if (!delegable) {
+                return false;
+            }
         }
         // This only declares operator support for the base JDBC join implementation.
         // Planner-side coercions and rendered join conditions determine whether any
@@ -342,6 +420,9 @@ public class TrinoClient
             Map<JdbcColumnHandle, String> rightAssignments,
             JoinStatistics statistics)
     {
+        if (!TrinoCompatibilityRegistry.isJoinDelegable(joinType, getRemoteCapabilities(session))) {
+            return Optional.empty();
+        }
         return JdbcJoinPushdownUtil.implementJoinCostAware(
                 session,
                 joinType,
@@ -370,6 +451,9 @@ public class TrinoClient
             List<ParameterizedExpression> joinConditions,
             JoinStatistics statistics)
     {
+        if (!TrinoCompatibilityRegistry.isJoinDelegable(joinType, getRemoteCapabilities(session))) {
+            return Optional.empty();
+        }
         return JdbcJoinPushdownUtil.implementJoinCostAware(
                 session,
                 joinType,
@@ -609,11 +693,28 @@ public class TrinoClient
     @Override
     public Optional<ColumnMapping> toColumnMapping(ConnectorSession session, Connection connection, JdbcTypeHandle typeHandle)
     {
-        Optional<ColumnMapping> mapping = getForcedMappingToVarchar(typeHandle);
-        if (mapping.isPresent()) {
-            return mapping;
-        }
-        return readMappingFactory.createColumnMapping(session, typeHandle);
+        return getForcedMappingToVarchar(typeHandle)
+                .or(() -> readMappingFactory.createColumnMapping(session, typeHandle))
+                .map(mapping -> {
+                    // Tuple-domain values bind through microsecond interval arithmetic, which
+                    // pre-484 servers evaluate with millisecond precision. Those servers report
+                    // interval types without precision, so decide from the column's remote type
+                    // name: workers rebuild this mapping from the same type handle as the
+                    // coordinator, while remote capabilities are loaded separately on each node.
+                    if (TrinoTypeClassifier.containsIntervalType(mapping.getType()) &&
+                            typeHandle.jdbcTypeName().map(TrinoTypeNameParser::containsLegacyIntervalTypeName).orElse(true)) {
+                        return ColumnMapping.mapping(mapping.getType(), mapping.getReadFunction(), mapping.getWriteFunction(), DISABLE_PUSHDOWN);
+                    }
+                    // The same applies to number columns, whose JDBC metadata changed in Trino 484
+                    ColumnMapping numberMapping = mapping;
+                    if (TrinoTypeClassifier.isNumberType(mapping.getType()) && !TrinoNumberCodec.hasTrino484Metadata(typeHandle)) {
+                        numberMapping = ColumnMapping.mapping(mapping.getType(), mapping.getReadFunction(), mapping.getWriteFunction(), TrinoNumberCodec.SINGLE_VALUES_LOCAL_PUSHDOWN);
+                    }
+                    // The query builder renders some filters on real, double, and number columns
+                    // as a predicate that NaN passes. The decision depends only on the domain
+                    // values, so every node renders the same SQL.
+                    return ComplementFilterPushdown.wrap(numberMapping);
+                });
     }
 
     private PreparedQuery applyTransportProjection(PreparedQuery preparedQuery, List<JdbcColumnHandle> columns)
@@ -651,35 +752,34 @@ public class TrinoClient
 
     private TrinoRemoteCapabilities getRemoteCapabilities(ConnectorSession session)
     {
-        TrinoRemoteCapabilities cached = remoteCapabilities.get();
-        if (cached != null) {
-            return cached;
-        }
-        if (!capabilitiesLoadBackoff.shouldAttempt()) {
-            return TrinoRemoteCapabilities.unavailable();
-        }
+        return remoteCapabilities.get(() -> getConnection(session));
+    }
 
-        TrinoRemoteCapabilities loaded;
-        try (Connection connection = getConnection(session)) {
-            loaded = TrinoRemoteCapabilities.load(connection);
-            loaded.version().ifPresent(version -> {
-                if (remoteVersionLogged.compareAndSet(false, true)) {
-                    log.info("Remote Trino version: %s", version);
-                }
-            });
+    private void logRemoteCapabilities(Optional<TrinoRemoteCapabilities> previous, TrinoRemoteCapabilities current)
+    {
+        String version = current.version().orElse("unknown");
+        if (previous.isPresent()) {
+            log.info("Remote Trino server changed. Remote Trino version: %s", version);
         }
-        catch (SQLException | RuntimeException e) {
-            // Transient failures must not be cached: only suppress reload attempts
-            // briefly, so a remote outage does not disable delegation until restart
-            capabilitiesLoadBackoff.recordFailure();
-            log.warn(e, "Unable to determine remote Trino capabilities; Trino-native delegation will fall back to local execution where possible");
-            return TrinoRemoteCapabilities.unavailable();
+        else if (remoteVersionLogged.compareAndSet(false, true)) {
+            log.info("Remote Trino version: %s", version);
         }
+        logLocalExecution(current, localVersion);
+    }
 
-        if (remoteCapabilities.compareAndSet(null, loaded)) {
-            return loaded;
+    private static void logLocalExecution(TrinoRemoteCapabilities capabilities, String localVersion)
+    {
+        if (!capabilities.sameVersionAsLocal()) {
+            log.info(
+                    "Remote Trino version %s is not the local version %s, so functions, casts, and arithmetic run locally",
+                    capabilities.version().orElse("unknown"),
+                    localVersion);
         }
-        return remoteCapabilities.get();
+        else if (!capabilities.otherEvaluationSettings().isEmpty()) {
+            log.info(
+                    "Remote Trino server does not evaluate expressions as a server with default settings (%s), so functions, casts, and arithmetic run locally",
+                    String.join(", ", capabilities.otherEvaluationSettings()));
+        }
     }
 
     private static Estimate toEstimate(Double value)

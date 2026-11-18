@@ -38,6 +38,8 @@ import static io.trino.spi.type.DoubleType.DOUBLE;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.RealType.REAL;
 import static io.trino.spi.type.SmallintType.SMALLINT;
+import static io.trino.spi.type.StandardTypes.INTERVAL_DAY_TO_SECOND;
+import static io.trino.spi.type.StandardTypes.INTERVAL_YEAR_TO_MONTH;
 import static io.trino.spi.type.TinyintType.TINYINT;
 
 final class TrinoTypeClassifier
@@ -134,12 +136,32 @@ final class TrinoTypeClassifier
 
     static boolean isIntervalYearToMonthType(Type type)
     {
-        return type.getDisplayName().startsWith("interval year to month");
+        return type.getBaseName().equals(INTERVAL_YEAR_TO_MONTH);
+    }
+
+    static boolean containsIntervalType(Type type)
+    {
+        if (type instanceof ArrayType arrayType) {
+            return containsIntervalType(arrayType.getElementType());
+        }
+        if (type instanceof MapType mapType) {
+            return containsIntervalType(mapType.getKeyType()) || containsIntervalType(mapType.getValueType());
+        }
+        if (type instanceof RowType rowType) {
+            return rowType.getFields().stream()
+                    .map(RowType.Field::getType)
+                    .anyMatch(TrinoTypeClassifier::containsIntervalType);
+        }
+        // Include the long day-time representation, which isIntervalDayToSecondType excludes.
+        return type.getBaseName().equals(INTERVAL_YEAR_TO_MONTH) ||
+                type.getBaseName().equals(INTERVAL_DAY_TO_SECOND);
     }
 
     static boolean isIntervalDayToSecondType(Type type)
     {
-        return type.getDisplayName().startsWith("interval day to second");
+        // Fractional precision above 6 uses the engine's LongInterval representation,
+        // which is not exposed through the SPI. Leave it to unsupported-type handling.
+        return type.getBaseName().equals(INTERVAL_DAY_TO_SECOND) && type.getJavaType() == long.class;
     }
 
     static boolean isJsonType(Type type)

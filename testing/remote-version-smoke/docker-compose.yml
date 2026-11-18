@@ -1,23 +1,26 @@
 services:
   trino-remote-version:
     image: "trinodb/trino:${REMOTE_TRINO_VERSION:?set REMOTE_TRINO_VERSION}"
-    mem_limit: "${REMOTE_VERSION_SMOKE_MEMORY_LIMIT:-1536m}"
+    mem_limit: "${REMOTE_VERSION_SMOKE_MEMORY_LIMIT:-2048m}"
     cpus: "${REMOTE_VERSION_SMOKE_CPU_LIMIT:-2.0}"
     entrypoint: ["/bin/bash", "/opt/trino-smoke/start-trino.sh"]
     environment:
       SMOKE_PLUGINS: "geospatial,memory,tpch"
+      SMOKE_JVM_HEAP: "${REMOTE_VERSION_SMOKE_HEAP:-1g}"
     volumes:
-      - ./conf/common/config.properties:/etc/trino/config.properties:ro
+      # conf/legacy-settings holds a server with other settings for evaluation
+      - "./conf/${REMOTE_TRINO_CONFIG:-common}/config.properties:/etc/trino/config.properties:ro"
       - ./start-trino.sh:/opt/trino-smoke/start-trino.sh:ro
       - ./conf/remote/catalog:/etc/trino/catalog:ro
 
   trino-local-version:
     image: "trinodb/trino:${LOCAL_TRINO_VERSION:?set LOCAL_TRINO_VERSION}"
-    mem_limit: "${REMOTE_VERSION_SMOKE_MEMORY_LIMIT:-1536m}"
+    mem_limit: "${REMOTE_VERSION_SMOKE_MEMORY_LIMIT:-2048m}"
     cpus: "${REMOTE_VERSION_SMOKE_CPU_LIMIT:-2.0}"
     entrypoint: ["/bin/bash", "/opt/trino-smoke/start-trino.sh"]
     environment:
-      SMOKE_PLUGINS: "geospatial,trino"
+      SMOKE_PLUGINS: "geospatial,memory,trino"
+      SMOKE_JVM_HEAP: "${REMOTE_VERSION_SMOKE_HEAP:-1g}"
     depends_on:
       - trino-remote-version
     volumes:

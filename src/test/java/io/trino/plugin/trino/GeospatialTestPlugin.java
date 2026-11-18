@@ -30,12 +30,12 @@ import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 
 /**
  * Trino publishes the geospatial plugin as a release ZIP, not as a Maven JAR.
- * Load the official 483 plugin into the in-process test runners without adding
+ * Load the official 484 plugin into the in-process test runners without adding
  * a geospatial dependency to the production connector.
  */
 final class GeospatialTestPlugin
 {
-    private static final String RELEASE_URL = "https://github.com/trinodb/trino/releases/download/483/trino-geospatial-483.zip";
+    private static final String RELEASE_URL = "https://github.com/trinodb/trino/releases/download/484/trino-geospatial-484.zip";
     private static final Path TEST_DIRECTORY = Path.of("target", "geospatial-test-plugin");
     private static URLClassLoader classLoader;
 
@@ -60,7 +60,7 @@ final class GeospatialTestPlugin
                     .newInstance();
         }
         catch (ReflectiveOperationException | IOException e) {
-            throw new IllegalStateException("Unable to load the official Trino 483 geospatial test plugin", e);
+            throw new IllegalStateException("Unable to load the official Trino 484 geospatial test plugin", e);
         }
     }
 
@@ -68,13 +68,13 @@ final class GeospatialTestPlugin
             throws IOException
     {
         Files.createDirectories(TEST_DIRECTORY);
-        Path pluginJar = TEST_DIRECTORY.resolve("io.trino_trino-geospatial-483.jar");
+        Path pluginJar = TEST_DIRECTORY.resolve("trino-geospatial-484.jar");
         Path extractionMarker = TEST_DIRECTORY.resolve(".complete");
         if (Files.exists(pluginJar) && Files.exists(extractionMarker)) {
             return TEST_DIRECTORY;
         }
 
-        Path archive = Path.of("target", "trino-geospatial-483.zip");
+        Path archive = Path.of("target", "trino-geospatial-484.zip");
         if (!Files.exists(archive)) {
             String configuredArchive = System.getenv("TRINO_GEOSPATIAL_PLUGIN_ZIP");
             if (configuredArchive != null && !configuredArchive.isBlank()) {
@@ -82,7 +82,7 @@ final class GeospatialTestPlugin
             }
             else {
                 Files.createDirectories(archive.getParent());
-                Path download = archive.resolveSibling("trino-geospatial-483.zip.download");
+                Path download = archive.resolveSibling("trino-geospatial-484.zip.download");
                 HttpURLConnection connection = (HttpURLConnection) URI.create(RELEASE_URL).toURL().openConnection();
                 connection.setConnectTimeout(30_000);
                 connection.setReadTimeout(120_000);
@@ -112,9 +112,9 @@ final class GeospatialTestPlugin
             }
         }
         if (!Files.exists(pluginJar)) {
-            throw new IOException("Trino 483 geospatial release ZIP does not contain its plugin JAR");
+            throw new IOException("Trino 484 geospatial release ZIP does not contain its plugin JAR");
         }
-        Files.writeString(extractionMarker, "483");
+        Files.writeString(extractionMarker, "484");
         return TEST_DIRECTORY;
     }
 

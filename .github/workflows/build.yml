@@ -55,6 +55,15 @@ jobs:
       - name: Run remote Delta smoke
         run: testing/remote-delta-smoke/run.sh
 
+      - name: Run remote version smoke for the same and the previous release
+        shell: bash
+        run: |
+          set -euo pipefail
+          trino_version="$(grep -A 3 '<parent>' pom.xml | grep '<version>' | head -n 1 | sed -E 's/.*<version>([^<]+)<.*/\1/')"
+          # A remote server of the same release receives functions and casts. A
+          # remote server of the previous release receives only the basic list.
+          testing/remote-version-smoke/run.sh "${trino_version}" "$((trino_version - 1))"
+
       - name: Upload test reports
         if: failure()
         uses: actions/upload-artifact@v6
@@ -64,4 +73,5 @@ jobs:
             target/surefire-reports/**
             target/failsafe-reports/**
             target/remote-delta-smoke/**
+            target/remote-version-smoke/**
           if-no-files-found: ignore

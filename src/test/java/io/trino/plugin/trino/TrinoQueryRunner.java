@@ -293,6 +293,15 @@ public final class TrinoQueryRunner
                 memorySession,
                 "CREATE TABLE alt.access_log AS SELECT * FROM (VALUES BIGINT '1', BIGINT '2') AS t(id)");
 
+        remoteRunner.execute(memorySession,
+                """
+                CREATE TABLE test_temporal_difference AS
+                SELECT TIMESTAMP '2026-01-02 00:00:00.123456789012' AS a,
+                       TIMESTAMP '2026-01-01 00:00:00.000000000001' AS b,
+                       TIME '12:00:00.123456789012' AS t,
+                       TIME '01:00:00.000000000001' AS u
+                """);
+
         // --- ARRAY types ---
         remoteRunner.execute(
                 memorySession,

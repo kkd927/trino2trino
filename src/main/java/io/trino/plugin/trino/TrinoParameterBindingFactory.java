@@ -166,10 +166,11 @@ final class TrinoParameterBindingFactory
     private static String typedBindExpression(Type type, WriteMapping mapping)
     {
         String bindExpression = mapping.getWriteFunction().getBindExpression();
-        String logicalTypeCast = "CAST(? AS " + type.getDisplayName() + ")";
-        if (bindExpression.equals(logicalTypeCast)) {
+        String logicalTypeCastSuffix = " AS " + type.getDisplayName() + ")";
+        if (bindExpression.startsWith("CAST(") && bindExpression.endsWith(logicalTypeCastSuffix)) {
+            // The write function already casts to the logical type
             return bindExpression;
         }
-        return "CAST(" + bindExpression + " AS " + type.getDisplayName() + ")";
+        return "CAST(" + bindExpression + logicalTypeCastSuffix;
     }
 }

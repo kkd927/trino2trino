@@ -40,10 +40,10 @@ Additional Maven options are passed through. This wrapper is only for local
 iteration; run `mvn -B clean verify` before submitting a change. Override the
 heap when needed with `TRINO_FAST_TEST_JVM_SIZE`.
 
-The geospatial integration tests for this Trino 483 source line load the matching
+The geospatial integration tests for this Trino 484 source line load the matching
 official geospatial plugin ZIP from the Trino GitHub release, caching it under
 `target/`. For offline runs, set `TRINO_GEOSPATIAL_PLUGIN_ZIP` to a previously
-downloaded `trino-geospatial-483.zip` file. When backporting to another local
+downloaded `trino-geospatial-484.zip` file. When backporting to another local
 Trino version, update the test plugin ZIP and version-specific spatial tests
 before running the full suite.
 
@@ -62,6 +62,7 @@ A `docker-compose.yml` is included for local testing with two Trino instances:
 ```bash
 # Build the plugin first
 mvn clean verify -DskipTests -Dair.check.skip-all=true
+unzip -q target/trino-trino-484.zip -d target
 
 # Start local (8080) and remote (9090) Trino instances
 docker compose up -d
@@ -78,8 +79,9 @@ SELECT * FROM trino.tpch.tiny.nation LIMIT 5;
 ## Delta Lake Smoke Test
 
 The default `Build and Test` CI workflow validates the packaged plugin against
-a separate Trino 483 cluster backed by a Delta Lake catalog. It reuses the
-`target/trino-trino-483` package produced by `mvn -B clean verify`.
+a separate Trino 484 cluster backed by a Delta Lake catalog. It reuses the
+`target/trino-trino-484.zip` package produced by `mvn -B clean verify`, unpacking
+it into `target/trino-trino-484` before starting the containers.
 
 To run the same smoke test locally:
 
@@ -95,7 +97,9 @@ Failure diagnostics are written to `target/remote-delta-smoke/`. See
 
 The separate [remote version smoke test](testing/remote-version-smoke/README.md)
 checks selected different Trino versions, including native geospatial reads
-when both versions support EWKB transport.
+when both versions support EWKB transport. Both CI workflows also run this probe
+against the same Trino version to verify interval filtering and high-precision
+temporal expressions with the packaged plugin.
 
 ## Documentation
 
