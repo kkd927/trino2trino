@@ -32,7 +32,7 @@ into the Trino plugin directory:
 
 ```bash
 # Example for Trino 483
-unzip trino-trino-483.zip -d /usr/lib/trino/plugin/trino/
+unzip trino-trino-483.zip -d /usr/lib/trino/plugin/
 ```
 
 ### 2. Configure

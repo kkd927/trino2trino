@@ -14,6 +14,7 @@
 package io.trino.plugin.trino;
 
 import io.trino.Session;
+import io.trino.sql.planner.plan.FilterNode;
 import io.trino.testing.DistributedQueryRunner;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.QueryRunner;
@@ -383,6 +384,60 @@ class TestTrinoConnectorTest
         assertThat(query("SELECT id FROM test_decimal_filter_pushdown WHERE amount > DECIMAL '50.000'"))
                 .isFullyPushedDown()
                 .matches("VALUES 'high'");
+    }
+
+    @Test
+    void testCharPredicatePushdown()
+    {
+        try (TestTable table = new TestTable(
+                onRemoteDatabase(),
+                "test_char_filter",
+                "AS SELECT * FROM (VALUES " +
+                        "(1, CAST('ab' AS char(3))), " +
+                        "(2, CAST('ab' || chr(9) AS char(3))), " +
+                        "(3, CAST('b' AS char(3)))) AS t(id, c)")) {
+            // 'ab' followed by a tab is less than 'ab' as char(3), which pads with spaces, and
+            // greater as varchar. A bare parameter is a varchar value, and servers from Trino
+            // 482 compare a char column with a varchar value as varchar.
+            assertThat(query("SELECT id FROM " + table.getName() + " WHERE c < CAST('ab' AS char(3))"))
+                    .isFullyPushedDown()
+                    .matches("VALUES 2");
+            assertThat(query("SELECT id FROM " + table.getName() + " WHERE c >= CAST('ab' AS char(3))"))
+                    .isFullyPushedDown()
+                    .matches("VALUES 1, 3");
+        }
+    }
+
+    @Test
+    void testFiltersThatNaNPassesRunLocally()
+    {
+        try (TestTable table = new TestTable(
+                onRemoteDatabase(),
+                "test_nan_filter",
+                "AS SELECT * FROM (VALUES " +
+                        "(1, 5e0, REAL '5', NUMBER '5'), " +
+                        "(2, nan(), CAST(nan() AS real), CAST(nan() AS number)), " +
+                        "(3, 1e0, REAL '1', NUMBER '1')) AS t(id, d, r, n)")) {
+            // The base JDBC query builder renders these filters as NOT (x = ?) and
+            // NOT (x IN (?, ?)), which the row with NaN passes
+            for (String filter : List.of(
+                    "d < 1 OR d > 1",
+                    "r < REAL '1' OR r > REAL '1'",
+                    "n < NUMBER '1' OR n > NUMBER '1'",
+                    "d < 1 OR (d > 1 AND d < 7) OR d > 7")) {
+                assertThat(query("SELECT id FROM " + table.getName() + " WHERE " + filter))
+                        .describedAs(filter)
+                        .isNotFullyPushedDown(FilterNode.class)
+                        .matches("VALUES 1");
+            }
+            // Ranges whose complement is a range stay on the remote server
+            assertThat(query("SELECT id FROM " + table.getName() + " WHERE d < 1 OR d > 2"))
+                    .isFullyPushedDown()
+                    .matches("VALUES 1");
+            // NaN passes <>, which the engine keeps out of a domain
+            assertThat(query("SELECT id FROM " + table.getName() + " WHERE d <> 1"))
+                    .matches("VALUES 1, 2");
+        }
     }
 
     @Test

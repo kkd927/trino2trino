@@ -158,8 +158,9 @@ jobs:
 
           Install:
           1. Download the ZIP asset.
-          2. Extract it into your Trino \`plugin/trino/\` directory.
-          3. Add a catalog properties file and restart Trino.
+          2. If a previous release of the connector is installed, delete its plugin directory, such as \`plugin/trino-trino-<previous version>\`. Trino fails to start when two plugin directories contain the connector.
+          3. Extract the ZIP into the Trino \`plugin/\` directory itself, for example \`unzip $(basename "${{ steps.assets.outputs.plugin_zip }}") -d /usr/lib/trino/plugin/\`. The archive contains its own plugin directory, so do not extract it into a subdirectory such as \`plugin/trino/\`.
+          4. Add a catalog properties file and restart Trino.
           EOF
 
           if gh release view "${tag}" >/dev/null 2>&1; then

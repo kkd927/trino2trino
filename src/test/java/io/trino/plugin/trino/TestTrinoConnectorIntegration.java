@@ -1021,6 +1021,18 @@ abstract class TestTrinoConnectorIntegration
     }
 
     @Test
+    void testInPredicateThatStaysLocalKeepsItsValueList()
+    {
+        // When IN cannot be pushed down, base-jdbc retries its arguments one by one. The
+        // engine requires the IN value list to remain an array constructor, so pushing
+        // that list as a separate remote column made the query fail.
+        assertThat(query("SELECT reverse(path) IN ('001/tsop/', 'x') FROM remote.default.test_delegation_log WHERE path = '/post/100'"))
+                .matches("VALUES true");
+        assertThat(query("SELECT NOT (reverse(path) IN ('001/tsop/', 'x')) FROM remote.default.test_delegation_log WHERE path = '/post/100'"))
+                .matches("VALUES false");
+    }
+
+    @Test
     void testComplexConstantProjectionFallsBackLocally()
     {
         // Regression: same as above, through the projection path

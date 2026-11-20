@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.trino;
 
+import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import io.airlift.stats.TDigest;
 import io.trino.plugin.jdbc.ColumnMapping;
@@ -21,6 +22,7 @@ import io.trino.plugin.jdbc.LongReadFunction;
 import io.trino.plugin.jdbc.ObjectReadFunction;
 import io.trino.plugin.jdbc.ObjectWriteFunction;
 import io.trino.plugin.jdbc.PredicatePushdownController;
+import io.trino.plugin.jdbc.SliceWriteFunction;
 import io.trino.spi.TrinoException;
 import io.trino.spi.block.Block;
 import io.trino.spi.block.SqlMap;
@@ -55,7 +57,6 @@ import static io.trino.plugin.jdbc.PredicatePushdownController.FULL_PUSHDOWN;
 import static io.trino.plugin.jdbc.StandardColumnMappings.bigintColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.booleanColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.charReadFunction;
-import static io.trino.plugin.jdbc.StandardColumnMappings.charWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.dateWriteFunctionUsingLocalDate;
 import static io.trino.plugin.jdbc.StandardColumnMappings.decimalColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.doubleColumnMapping;
@@ -553,8 +554,32 @@ final class TrinoReadMappingFactory
         return ColumnMapping.sliceMapping(
                 charType,
                 charReadFunction(charType),
-                charWriteFunction(),
+                charWriteFunction(charType),
                 FULL_PUSHDOWN);
+    }
+
+    private static SliceWriteFunction charWriteFunction(CharType charType)
+    {
+        // A bare parameter is a varchar value. Since Trino 482, a server compares a char
+        // column with a varchar value as varchar, without padding, so a filter such as
+        // c < CAST('ab' AS char(3)) missed 'ab' followed by a character below a space. The
+        // cast keeps the comparison between char values on every remote version.
+        String bindExpression = "CAST(? AS " + charType.getDisplayName() + ")";
+        return new SliceWriteFunction()
+        {
+            @Override
+            public String getBindExpression()
+            {
+                return bindExpression;
+            }
+
+            @Override
+            public void set(PreparedStatement statement, int index, Slice value)
+                    throws SQLException
+            {
+                statement.setString(index, value.toStringUtf8());
+            }
+        };
     }
 
     private static ColumnMapping varcharColumnMapping(VarcharType varcharType)

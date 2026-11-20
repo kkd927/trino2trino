@@ -63,6 +63,7 @@ import io.trino.spi.connector.JoinType;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.expression.Call;
 import io.trino.spi.expression.ConnectorExpression;
+import io.trino.spi.expression.Constant;
 import io.trino.spi.expression.FunctionName;
 import io.trino.spi.expression.StandardFunctions;
 import io.trino.spi.statistics.ColumnStatistics;
@@ -290,10 +291,20 @@ public class TrinoClient
     @Override
     public Optional<JdbcExpression> convertProjection(ConnectorSession session, JdbcTableHandle handle, ConnectorExpression expression, Map<String, ColumnHandle> assignments)
     {
-        if (referencesGeospatialType(expression) || !handle.getUpdateAssignments().isEmpty() || assignments.values().stream().anyMatch(TrinoClient::isHiddenJdbcColumn)) {
+        if (referencesGeospatialType(expression) || !handle.getUpdateAssignments().isEmpty() || assignments.values().stream().anyMatch(TrinoClient::isHiddenJdbcColumn) ||
+                isArgumentOnlyProjection(expression)) {
             return Optional.empty();
         }
         return delegationAnalyzer.analyzeProjection(session, expression, assignments, getRemoteCapabilities(session));
+    }
+
+    private static boolean isArgumentOnlyProjection(ConnectorExpression expression)
+    {
+        // Base-jdbc retries each argument of a projection that it cannot push down. A
+        // constant gains nothing from remote evaluation, and the engine translates an
+        // IN predicate back only while its value list is still an array constructor.
+        return expression instanceof Constant ||
+                (expression instanceof Call call && call.getFunctionName().equals(StandardFunctions.ARRAY_CONSTRUCTOR_FUNCTION_NAME));
     }
 
     private static boolean referencesGeospatialType(ConnectorExpression expression)
@@ -613,7 +624,11 @@ public class TrinoClient
         if (mapping.isPresent()) {
             return mapping;
         }
-        return readMappingFactory.createColumnMapping(session, typeHandle);
+        // The query builder renders some filters on real, double, and number columns as a
+        // predicate that NaN passes. The decision depends only on the domain values, so
+        // every node renders the same SQL.
+        return readMappingFactory.createColumnMapping(session, typeHandle)
+                .map(ComplementFilterPushdown::wrap);
     }
 
     private PreparedQuery applyTransportProjection(PreparedQuery preparedQuery, List<JdbcColumnHandle> columns)
