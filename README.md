@@ -160,8 +160,10 @@ runs every operation on every type against each remote version it tests, and
 requires the result of the local server.
 
 For a remote server of another version, the connector evaluates everything else
-locally, on the rows that pass the pushed down filters. The basic list leaves
-out these operations:
+locally, on the rows that pass the pushed down filters. The
+[query guide](docs/query-guide.md) shows how to write a query so that such a
+server evaluates its filters and aggregations. The basic list leaves out these
+operations:
 
 | Not in the basic list | Reason |
 |---|---|
